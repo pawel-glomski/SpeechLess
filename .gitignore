@@ -1,2 +1,5 @@
 venv/
 .vscode/
+data/*
+!dataset
+__pycache__
