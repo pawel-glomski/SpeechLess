@@ -33,11 +33,11 @@ def plot_history(history):
     plt.savefig("LearningHistory.jpg")
 
 
-def loadData(validationRatio):
+def loadDataset(validationRatio):
     dataset = pickle.load(dsFile)
-    data, targets = dataset["MFCCs"], dataset["label"]
-    data = np.expand_dims(data, -1)
-    return train_test_split(data, targets, test_size=validationRatio)
+    dataset["MFCC"] = dataset["MFCC"][..., np.newaxis]
+    temp = dataset["range"][0]
+    return (dataset, (temp[1] - temp[0], *dataset["MFCC"].shape[1:]))
 
 
 def makeModel(inputShape):
@@ -74,11 +74,54 @@ def makeModel(inputShape):
     return model
 
 
+def splitDataset(dataset, validationPart):
+    return train_test_split(dataset["range"], dataset["label"], test_size=validationPart)
+
+
+def prepareBatch(batch, dataset):
+    return np.array([dataset["MFCC"][segRange[0]:segRange[1]] for segRange in batch])
+
+
+def fit(model: keras.Model, dataset, batchSize, epochs, validationPart=0.2):
+    x, vX, y, vY = splitDataset(dataset, validationPart)
+
+    hist = type('', (), {})  # mock object
+    setattr(hist, "history", {"accuracy": [],
+                              "loss": [],
+                              "val_accuracy": [],
+                              "val_loss": []})
+
+    epochLen = int(x.shape[0] / batchSize)
+    for e in range(epochs):
+        # train
+        for i, trainIdcs in enumerate(np.random.permutation(epochLen * batchSize).reshape(epochLen, batchSize)):
+            trainX = prepareBatch(np.take(x, trainIdcs, axis=0), dataset)
+            trainY = np.take(y, trainIdcs, axis=0)
+            trLoss, trAcc = model.train_on_batch(trainX, trainY, reset_metrics=False)
+            print("Epoch #{}: {:.2f}%\r".format(e+1, i / epochLen * 100), end="", flush=True)
+        model.reset_metrics()
+        # validate
+        for i in range(batchSize):
+            valIdcs = np.random.choice(vX.shape[0], batchSize)
+            valX = prepareBatch(np.take(vX, valIdcs, axis=0), dataset)
+            valY = np.take(vY, valIdcs, axis=0)
+            vaLoss, vaAcc = model.test_on_batch(valX, valY, reset_metrics=False)
+        model.reset_metrics()
+
+        print("Epoch #{}: Done! trAcc = {:.4f}, trLoss = {:.4f}, vaAcc = {:.4f}, vaLoss = {:.4f}".
+              format(e+1, trAcc, trLoss, vaAcc, vaLoss))
+
+        hist.history["loss"].append(trLoss)
+        hist.history["accuracy"].append(trAcc)
+        hist.history["val_loss"].append(vaLoss)
+        hist.history["val_accuracy"].append(vaAcc)
+    return hist
+
+
 with open(GenerateDataset.DATASET_PATH, "rb") as dsFile:
-    trainX, testX, trainY, testY = loadData(0.2)
-    model = makeModel(trainX[0].shape)
-    history = model.fit(trainX, trainY, validation_data=(testX, testY), batch_size=32, epochs=80)
-    plot_history(history)
+    dataset, inputShape = loadDataset(0.2)
+    model = makeModel(inputShape)
+    plot_history(fit(model, dataset, 32, 60))
     model.save("lastModel")
 
     # model = keras.models.load_model("lastModel")

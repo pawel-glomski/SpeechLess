@@ -9,6 +9,8 @@ import matplotlib.pyplot as plt
 import csv
 import pickle
 
+ALGORITHM = "classification"  # [classification, style]
+
 DATA_DIR = (Path.cwd()/("../data" if Path.cwd().name == "src" else "data")).resolve()
 DATASET_PATH = DATA_DIR/"dataset"
 
@@ -31,6 +33,7 @@ def calcMFCCs(signal):
                                 n_mfcc=N_MFCC,
                                 n_fft=N_FFT,
                                 hop_length=HOP_LENGTH).T
+    # return np.abs(librosa.core.stft(signal, N_FFT, HOP_LENGTH)).T
 
 
 def loadSignal(fileName):
@@ -52,27 +55,34 @@ def generateDataset():
     if not DATA_DIR.exists():
         print("No data directory found")
         return
-
-    dataset = {"MFCCs": [],
+    dataset = {"MFCC": [],
+               "range": [],
                "label": []}
+    idxOffset = 0
+
     for fileName in DATA_DIR.glob("*.labels"):
         with open(fileName) as fi:
-            # prepare mfcc and their targets
+            # prepare MFCCs and targets
             mfcc = calcMFCCs(loadSignal(fileName))
-            targets = np.ones(shape=(len(mfcc)))
+            targets = np.ones(mfcc.shape[0])
             for (beg, end, tag) in csv.reader(fi, delimiter="\t"):
-                targets[timeToMFCCIdx(beg): timeToMFCCIdx(end)] = tag == "r"
+                targets[timeToMFCCIdx(beg): timeToMFCCIdx(end)] = (tag == "r")
 
-            # prepare segments
-            for i in range(0, len(mfcc) - SEG_LEN, SEQ_HOP_LENGTH):
-                dataset["MFCCs"].append(mfcc[i:i+SEG_LEN])
-                dataset["label"].append((np.mean(targets[i+SEQ_PADDING:i+SEQ_PADDING+SEQ_LEN])) > 0.4)
-    dataset["MFCCs"] = np.array(dataset["MFCCs"])
+            # save ranges and labels of segments
+            for i in range(0, mfcc.shape[0] - SEG_LEN, SEQ_HOP_LENGTH):
+                dataset["range"].append(np.array([idxOffset + i, idxOffset + i + SEG_LEN]))
+                dataset["label"].append(float(np.mean(targets[i+SEQ_PADDING:i+SEQ_PADDING+SEQ_LEN]) >= 0.5))
+
+            # save MFCCs
+            dataset["MFCC"].append(mfcc[:i+SEG_LEN])  # include only MFCCs that are labeled
+            idxOffset += len(dataset["MFCC"][-1])
+
+    dataset["MFCC"] = np.concatenate(dataset["MFCC"], axis=0)
+    dataset["range"] = np.array(dataset["range"])
     dataset["label"] = np.array(dataset["label"])
-    print(np.mean(dataset["label"]))
     with open(DATASET_PATH, "wb") as dsFile:
         pickle.dump(dataset, dsFile)
-        print("Generated {} samples".format(len(dataset["MFCCs"])))
+        print("Generated {} samples. Average label = {:.4f}".format(dataset["label"].shape[0], np.mean(dataset["label"])))
 
 
 if __name__ == "__main__":
