@@ -1,42 +1,17 @@
-# %%
-
 from pathlib import Path
 import numpy as np
 import ffmpeg
-import librosa
-import librosa.display
-import matplotlib.pyplot as plt
 import csv
 import pickle
-import soundfile
 
 DATA_DIR = (Path.cwd()/("../data" if Path.cwd().name == "src" else "data")).resolve()
 DATASET_PATH = DATA_DIR/"dataset"
 
-SAMPLE_RATE = 22050
-N_MFCC = 25
-N_FFT = 2048
-HOP_LENGTH = 512
-N_MFCC_VECS_IN_SEC = int(np.ceil(SAMPLE_RATE / HOP_LENGTH))
-
-# in MFCCs vectors
-SEQ_LEN = int(np.ceil(0.15 * N_MFCC_VECS_IN_SEC))
-SEQ_PADDING = int(np.ceil(1.0 * N_MFCC_VECS_IN_SEC))
-SEQ_HOP_LENGTH = int(SEQ_LEN / 2)
-SEG_LEN = SEQ_LEN + 2*SEQ_PADDING
-
-
-def calcMFCCs(signal):
-    return librosa.feature.mfcc(signal,
-                                sr=SAMPLE_RATE,
-                                n_mfcc=N_MFCC,
-                                n_fft=N_FFT,
-                                hop_length=HOP_LENGTH).T
-    # return np.abs(librosa.core.stft(signal, N_FFT, HOP_LENGTH)).T
-    # return librosa.feature.melspectrogram(signal,
-    #                                       sr=SAMPLE_RATE,
-    #                                       n_fft=N_FFT,
-    #                                       hop_length=HOP_LENGTH).T
+SAMPLE_RATE = 16000
+SEG_LEN = int(1.0*SAMPLE_RATE)
+SEG_CELL_LEN = 128
+SEG_CELLS = int(SEG_LEN / SEG_CELL_LEN) if SEG_LEN % SEG_CELL_LEN == 0 else exit()
+SEG_CELLS_HOP = int(SEG_CELLS/25) if SEG_CELLS % 25 == 0 else exit()
 
 
 def loadSignal(fileName):
@@ -45,11 +20,7 @@ def loadSignal(fileName):
               .output('-', format='s16le', acodec='pcm_s16le', ac=1, ar=SAMPLE_RATE)
               .overwrite_output()
               .run(capture_stdout=True))
-    return np.frombuffer(out, np.int16) / np.iinfo(np.int16).max
-
-
-def timeToMFCCIdx(time):
-    return int(np.ceil(float(time) * SAMPLE_RATE) / HOP_LENGTH)
+    return np.frombuffer(out, np.int16)
 
 
 def generateDataset():
@@ -63,25 +34,22 @@ def generateDataset():
 
     for fileName in DATA_DIR.glob("*.labels"):
         with open(fileName) as fi:
-            # prepare MFCCs and targets
-            audSig = loadSignal(list(DATA_DIR.glob(Path(fileName).stem + ".[!labels]*"))[0])
-            mfcc = calcMFCCs(audSig)
-            targets = np.ones(mfcc.shape[0])
+            # prepare data and targets
+            sig = loadSignal(list(DATA_DIR.glob(Path(fileName).stem + ".[!labels]*"))[0])
+            sig = sig[:int(len(sig) / SEG_LEN) * SEG_LEN]
+            targets = np.ones(int(sig.shape[0] / SEG_CELL_LEN))
             for (beg, end, tag) in csv.reader(fi, delimiter="\t"):
-                targets[timeToMFCCIdx(beg): timeToMFCCIdx(end)] = (tag == "r")
+                targets[int(float(beg) * SAMPLE_RATE / SEG_CELL_LEN):
+                        int(np.ceil(float(end) * SAMPLE_RATE / SEG_CELL_LEN))] = (tag == "r")
 
             # save ranges and labels of segments
-            for i in range(0, mfcc.shape[0] - SEG_LEN, SEQ_HOP_LENGTH):
-                label = float(np.mean(targets[i+SEQ_PADDING:i+SEQ_PADDING+SEQ_LEN]) >= 0.3)
-                dataset["range"].append(np.array([idxOffset + i, idxOffset + i + SEG_LEN]))
-                dataset["label"].append(label)
-                if label == 1:
-                    newPart = audSig[(i + SEQ_PADDING)*HOP_LENGTH:
-                                     (i + SEQ_PADDING + SEQ_LEN)*HOP_LENGTH]
+            for i in range(0, targets.shape[0] - SEG_CELLS, SEG_CELLS_HOP):
+                dataset["range"].append(np.array([idxOffset + i*SEG_CELL_LEN, idxOffset + (i + SEG_CELLS) * SEG_CELL_LEN]))
+                dataset["label"].append(targets[i:i+SEG_CELLS])
 
-            # save MFCCs
-            dataset["data"].append(mfcc[: i+SEG_LEN])  # include only MFCCs that are labeled
-            idxOffset += len(dataset["data"][-1])
+            # save data
+            dataset["data"].append(sig)
+            idxOffset += len(sig)
 
     dataset["data"] = np.concatenate(dataset["data"], axis=0)
     dataset["range"] = np.array(dataset["range"])
@@ -89,6 +57,19 @@ def generateDataset():
     with open(DATASET_PATH, "wb") as dsFile:
         pickle.dump(dataset, dsFile)
         print("Generated {} samples. Average label = {:.4f}".format(dataset["label"].shape[0], np.mean(dataset["label"])))
+
+    labels = dataset["label"].reshape(-1) == 0
+    ranges = np.where(labels[:-1] != labels[1:])[0] + 1
+    isEven = len(ranges) % 2 == 0
+    if (isEven and labels[0]) or (not isEven and labels[0]):
+        ranges = np.concatenate([[0], ranges])
+    if (isEven and labels[0]) or (not isEven and not labels[0]):
+        ranges = np.concatenate([ranges, [len(labels)]])
+    ranges = ranges.reshape((-1, 2))
+
+    # with open("outLabels.labels", "w") as file:
+    #     for r in ranges * SEG_CELL_LEN / SAMPLE_RATE:
+    #         file.write(f"{r[0]}\t{r[1]}\n")
 
 
 if __name__ == "__main__":
