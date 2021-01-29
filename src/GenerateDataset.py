@@ -4,15 +4,16 @@ import ffmpeg
 import csv
 import pickle
 import librosa
+import soundfile as sf
 
 DATA_DIR = (Path.cwd()/("../data" if Path.cwd().name == "src" else "data")).resolve()
 DATASET_PATH = DATA_DIR/"dataset"
 
 SAMPLE_RATE = 16000
 SEG_LEN = int(1.0*SAMPLE_RATE)
-SEG_CELL_LEN = 128
+SEG_CELL_LEN = 400
 SEG_CELLS = int(SEG_LEN / SEG_CELL_LEN) if SEG_LEN % SEG_CELL_LEN == 0 else exit()
-SEG_CELLS_HOP = int(SEG_CELLS/5) if SEG_CELLS % 5 == 0 else exit()
+SEG_CELLS_HOP = int(SEG_CELLS/4) if SEG_CELLS % 4 == 0 else exit()
 
 MEL_HOP = SEG_CELL_LEN
 MEL_N_FFT = 4*MEL_HOP
@@ -24,7 +25,8 @@ def loadSignal(fileName):
               .output('-', format='f32le', acodec='pcm_f32le', ac=1, ar=SAMPLE_RATE)
               .overwrite_output()
               .run(capture_stdout=True))
-    return np.frombuffer(out, np.float32)
+    out = np.frombuffer(out, np.float32)
+    return out / max(np.max(out), abs(np.min(out)))
 
 
 def calcMelSpect(sig):
@@ -59,6 +61,10 @@ def generateDataset():
             # save data
             dataset["data"].append(spect)
             idxOffset += spect.shape[0]
+
+            # sig = sig.reshape(-1, SEG_CELL_LEN)
+            # sig = sig[targets == 0]
+            # sf.write(f"{Path(fileName).stem}real.wav", sig.reshape(-1), SAMPLE_RATE)
 
     dataset["data"] = np.concatenate(dataset["data"], axis=0)
     dataset["range"] = np.array(dataset["range"])

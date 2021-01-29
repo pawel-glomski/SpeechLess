@@ -20,7 +20,7 @@ from GenerateDataset import SEG_CELLS
 
 TO_OPTIMIZE_DIR = (Path.cwd()/("../toOptimize" if Path.cwd().name == "src" else "toOptimize")).resolve()
 V_FPS = 15
-THRESHOLD = 0.60
+THRESHOLD = 0.8
 
 physical_devices = tf.config.list_physical_devices('GPU')
 tf.config.experimental.set_memory_growth(physical_devices[0], enable=True)
@@ -34,29 +34,31 @@ def loadDataset():
 
 
 def makeModel(inputShape, outputShape):
-    # xIn = keras.Input(shape=inputShape)
+    xIn = keras.Input(shape=inputShape)
 
-    # x = keras.layers.Conv2D(160, kernel_size=(3, 3), strides=(2, 3), activation="elu")(xIn)
+    x = keras.layers.Conv2D(104, kernel_size=(3, 3), strides=(1, 2), activation="elu", padding="same")(xIn)
+    x = keras.layers.Conv2D(104, kernel_size=(3, 3), strides=(1, 1), activation="elu", padding="same")(x)
+    x = layers.BatchNormalization()(x)
+    x = keras.layers.Conv2D(104, kernel_size=(3, 3), strides=(2, 2), activation="elu", padding="same")(x)
+    x = keras.layers.Conv2D(104, kernel_size=(3, 3), strides=(1, 1), activation="elu", padding="same")(x)
+    x = layers.BatchNormalization()(x)
+    x = keras.layers.Conv2D(128, kernel_size=(3, 3), strides=(1, 2), activation="elu", padding="same")(x)
+    x = keras.layers.Conv2D(128, kernel_size=(3, 3), strides=(1, 2), activation="elu", padding="same")(x)
+    x = layers.BatchNormalization()(x)
+    x = keras.layers.Conv2D(128, kernel_size=(2, 2), strides=(1, 2), activation="elu", padding="same")(x)
+    x = keras.layers.Conv2D(128, kernel_size=(2, 2), strides=(1, 1), activation="elu", padding="same")(x)
     # x = keras.layers.MaxPool2D((2, 2))(x)
+    x = layers.Flatten()(x)
+    x = layers.Dropout(0.5)(x)
 
-    # x = keras.layers.Conv2D(256, kernel_size=(2, 2), activation="elu")(x)
-    # x = keras.layers.MaxPool2D((2, 2))(x)
+    x = layers.Dense(80, activation="elu")(x)
+    x = layers.Dropout(0.5)(x)
+    xOut = layers.Dense(outputShape[0], activation="sigmoid")(x)
 
-    # x = keras.layers.Conv2D(256+128, kernel_size=(2, 2), activation="elu")(x)
-    # x = keras.layers.MaxPool2D((2, 2))(x)
-    # x = keras.layers.Conv2D(512+256, kernel_size=(2, 2), activation="elu")(x)
-    # x = keras.layers.MaxPool2D((2, 2))(x)
-    # x = layers.Flatten()(x)
-    # x = layers.Dropout(0.5)(x)
-
-    # x = layers.Dense(150, activation="elu")(x)
-    # x = layers.Dropout(0.4)(x)
-    # xOut = layers.Dense(outputShape[0], activation="sigmoid")(x)
-
-    # model = keras.Model(inputs=xIn, outputs=xOut)
-    # model.compile(optimizer=keras.optimizers.Adam(learning_rate=0.0001),
-    #               loss='binary_crossentropy')
-    model = keras.models.load_model("lastModel")
+    model = keras.Model(inputs=xIn, outputs=xOut)
+    model.compile(optimizer=keras.optimizers.Adam(learning_rate=0.0001),
+                  loss='binary_crossentropy')
+    # model = keras.models.load_model("lastModel")
     model.summary()
     return model
 
@@ -73,7 +75,7 @@ def fit(model, dataset, batchSize, epochs, validationPart=0.1):
     x, vX, y, vY = splitDataset(dataset, validationPart)
 
     epochLen = int(x.shape[0] / batchSize)
-    validLen = int(vX.shape[0] / batchSize / 2)
+    validLen = max(1, int(vX.shape[0] / batchSize / 2))
     for e in range(epochs):
         # train
         for i, trainIdcs in enumerate(np.random.permutation(epochLen * batchSize).reshape(epochLen, batchSize)):
@@ -91,14 +93,14 @@ def fit(model, dataset, batchSize, epochs, validationPart=0.1):
 
         print(f"Epoch #{e+1}: Done! trLoss = {trLoss:.4f}, vaLoss = {vaLoss:.4f}")
 
-        if e % 5 == 4:
-            model.save("lastModel")
+        # if e % 5 == 4:
+        #     model.save("lastModel")
 
 
 with open(gd.DATASET_PATH, "rb") as dsFile:
     # dataset, inShape, outShape = loadDataset()
     # model = makeModel(inShape, outShape)
-    # fit(model, dataset, 32, 100)
+    # fit(model, dataset, 32, 150)
     # model.save("lastModel")
 
     model = keras.models.load_model("lastModel")
@@ -130,9 +132,7 @@ with open(gd.DATASET_PATH, "rb") as dsFile:
             ranges = np.concatenate([ranges, [len(labels)]])
         ranges = ranges.reshape((-1, 2))
 
-        # with open(f"optimized/{fileName.stem}.txt", "w") as file:
-        #     for r in ranges * (gd.SEG_CELL_LEN / gd.SAMPLE_RATE):
-        #         file.write(f"{r[0]}\t{r[1]}\n")
+        audio = sig.reshape((-1, gd.SEG_CELL_LEN))[labels].reshape(-1)
 
         framesToGet = []
         videoLen = 0
@@ -160,7 +160,6 @@ with open(gd.DATASET_PATH, "rb") as dsFile:
 
         p = subprocess.Popen([f"ffmpeg -y -i {str(fileName)} -an -vsync cfr -r {V_FPS} " +
                               f"-c:v hevc_nvenc -preset fast .temp/norm.mp4"], shell=True)
-        audio = sig.reshape((-1, gd.SEG_CELL_LEN))[labels].reshape(-1)
         sf.write(f".temp/audio.wav", audio, gd.SAMPLE_RATE)
         p.wait()
 
