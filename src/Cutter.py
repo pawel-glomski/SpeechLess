@@ -1,143 +1,105 @@
-from sklearn.model_selection import train_test_split
-from scipy.interpolate import CubicSpline
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import soundfile as sf
 import numpy as np
-import GenerateDataset as gd
-
-import subprocess
-import pickle
-import shutil
+import ffmpeg
 import librosa
 
-import tensorflow as tf
-from tensorflow import keras
-from tensorflow.keras import layers
-
-from GenerateDataset import SEG_CELLS
+import subprocess
+import shutil
 
 TO_OPTIMIZE_DIR = (Path.cwd()/("../toOptimize" if Path.cwd().name == "src" else "toOptimize")).resolve()
 V_FPS = 15
-THRESHOLD = 0.8
+THRESHOLD = 1.2
 
-physical_devices = tf.config.list_physical_devices('GPU')
-tf.config.experimental.set_memory_growth(physical_devices[0], enable=True)
-
-
-def loadDataset():
-    dataset = pickle.load(dsFile)
-    dataset["data"] = dataset["data"][..., np.newaxis]
-    temp = dataset["range"][0]
-    return (dataset, (temp[1] - temp[0], *dataset["data"].shape[1:]), dataset["label"][0].shape)
+SAMPLE_RATE = 22050
+SEG_LEN = 512
+MEL_HOP = SEG_LEN
+MEL_N_FFT = int(2*MEL_HOP)
 
 
-def makeModel(inputShape, outputShape):
-    xIn = keras.Input(shape=inputShape)
-
-    x = keras.layers.Conv2D(104, kernel_size=(3, 3), strides=(1, 2), activation="elu", padding="same")(xIn)
-    x = keras.layers.Conv2D(104, kernel_size=(3, 3), strides=(1, 1), activation="elu", padding="same")(x)
-    x = layers.BatchNormalization()(x)
-    x = keras.layers.Conv2D(104, kernel_size=(3, 3), strides=(2, 2), activation="elu", padding="same")(x)
-    x = keras.layers.Conv2D(104, kernel_size=(3, 3), strides=(1, 1), activation="elu", padding="same")(x)
-    x = layers.BatchNormalization()(x)
-    x = keras.layers.Conv2D(128, kernel_size=(3, 3), strides=(1, 2), activation="elu", padding="same")(x)
-    x = keras.layers.Conv2D(128, kernel_size=(3, 3), strides=(1, 2), activation="elu", padding="same")(x)
-    x = layers.BatchNormalization()(x)
-    x = keras.layers.Conv2D(128, kernel_size=(2, 2), strides=(1, 2), activation="elu", padding="same")(x)
-    x = keras.layers.Conv2D(128, kernel_size=(2, 2), strides=(1, 1), activation="elu", padding="same")(x)
-    # x = keras.layers.MaxPool2D((2, 2))(x)
-    x = layers.Flatten()(x)
-    x = layers.Dropout(0.5)(x)
-
-    x = layers.Dense(80, activation="elu")(x)
-    x = layers.Dropout(0.5)(x)
-    xOut = layers.Dense(outputShape[0], activation="sigmoid")(x)
-
-    model = keras.Model(inputs=xIn, outputs=xOut)
-    model.compile(optimizer=keras.optimizers.Adam(learning_rate=0.0001),
-                  loss='binary_crossentropy')
-    # model = keras.models.load_model("lastModel")
-    model.summary()
-    return model
+def loadSignal(fileName):
+    out, _ = (ffmpeg
+              .input(fileName)
+              .output('-', format='f32le', acodec='pcm_f32le', ac=1, ar=SAMPLE_RATE)
+              .overwrite_output()
+              .run(capture_stdout=True))
+    out = np.frombuffer(out, np.float32)
+    return out / max(np.max(out), abs(np.min(out)))
 
 
-def splitDataset(dataset, validationPart):
-    return train_test_split(dataset["range"], dataset["label"], test_size=validationPart)
+def calcIndicator(sig):
+    # it generates one more for some reason
+    y = librosa.power_to_db(librosa.feature.melspectrogram(sig, sr=SAMPLE_RATE, n_fft=MEL_N_FFT, hop_length=MEL_HOP).T)[:-1]
+    y -= np.median(y)
+    y[y < 0] = 0
+    y /= np.max(y)
+    y1 = (y[1:, :]-y[:-1, :])**2
+    y[:] = 0
+    y[:-1, :] = y1
+    y[1:, :] += y1
+    y[1:-1, :] /= 2
+    y = np.mean(y, axis=1)
+    N = int(SAMPLE_RATE/MEL_HOP/20)
+    n = y.shape[0]
+    y2 = y
+    for i in range(2*N+1):
+        if i != N:
+            y2[N:-N] += y[i:n-2*N+i]/(2*N+1)
+    return y2
 
 
-def prepareBatch(batch, dataset):
-    return np.array([dataset["data"][segRange[0]:segRange[1]] for segRange in batch])
+def trueRanges(arr):
+    ranges = np.where(arr[:-1] != arr[1:])[0] + 1
+    isEven = len(ranges) % 2 == 0
+    if (isEven and arr[0]) or (not isEven and arr[0]):
+        ranges = np.concatenate([[0], ranges])
+    if (isEven and arr[0]) or (not isEven and not arr[0]):
+        ranges = np.concatenate([ranges, [len(arr)]])
+    return ranges.reshape((-1, 2))
 
 
-def fit(model, dataset, batchSize, epochs, validationPart=0.1):
-    x, vX, y, vY = splitDataset(dataset, validationPart)
+def optimizeSignal(sig):
+    minTrueSeq = 6
+    minFalseSeq = 4
 
-    epochLen = int(x.shape[0] / batchSize)
-    validLen = max(1, int(vX.shape[0] / batchSize / 2))
-    for e in range(epochs):
-        # train
-        for i, trainIdcs in enumerate(np.random.permutation(epochLen * batchSize).reshape(epochLen, batchSize)):
-            trainX = prepareBatch(np.take(x, trainIdcs, axis=0), dataset)
-            trainY = np.take(y, trainIdcs, axis=0)
-            trLoss = model.train_on_batch(trainX, trainY, reset_metrics=False)
-            print(f"Epoch #{e+1}: {i / epochLen * 100:.2f}%: trLoss = {trLoss:.4f}\r", end="", flush=True)
-        model.reset_metrics()
-        # validate
-        for i, valIdcs in enumerate(np.random.permutation(validLen * batchSize).reshape(validLen, batchSize)):
-            valX = prepareBatch(np.take(vX, valIdcs, axis=0), dataset)
-            valY = np.take(vY, valIdcs, axis=0)
-            vaLoss = model.test_on_batch(valX, valY, reset_metrics=False)
-        model.reset_metrics()
+    sig = sig[:int(len(sig) / SEG_LEN) * SEG_LEN].reshape((-1, SEG_LEN))
+    indicator = calcIndicator(sig.reshape(-1))
+    labels = indicator >= ((np.median(indicator) + np.mean(indicator)) / 2 * (1/THRESHOLD))
 
-        print(f"Epoch #{e+1}: Done! trLoss = {trLoss:.4f}, vaLoss = {vaLoss:.4f}")
+    ##################### Reduce aggresive cuts #####################
 
-        # if e % 5 == 4:
-        #     model.save("lastModel")
+    ranges = trueRanges(labels == False)
+    ranges = ranges[(ranges[:, 1] - ranges[:, 0]) >= minFalseSeq]
+    labels[:] = True
+    for r in ranges:
+        labels[r[0]:r[1]] = False
+
+    ##################### Cut out small segments #####################
+
+    ranges = trueRanges(labels)
+    ranges = ranges[(ranges[:, 1] - ranges[:, 0]) >= minTrueSeq]
+    labels[:] = False
+    for r in ranges:
+        labels[r[0]:r[1]] = True
+
+    ranges = trueRanges(labels)
+    return (sig[labels].reshape(-1), ranges)
 
 
-with open(gd.DATASET_PATH, "rb") as dsFile:
-    # dataset, inShape, outShape = loadDataset()
-    # model = makeModel(inShape, outShape)
-    # fit(model, dataset, 32, 150)
-    # model.save("lastModel")
-
-    model = keras.models.load_model("lastModel")
+if __name__ == "__main__":
     for fileName in TO_OPTIMIZE_DIR.glob("*"):
         if not Path(fileName).is_file():
             continue
-        sig = gd.loadSignal(fileName)
-        sig = sig[:int(len(sig) / gd.SEG_LEN) * gd.SEG_LEN]
-        melIn = gd.calcMelSpect(sig)
 
-        labels = np.zeros(int(len(sig) / gd.SEG_CELL_LEN))
-        for i, offset in enumerate(range(0, gd.SEG_CELLS, int(np.ceil(gd.SEG_CELLS/3)))):
-            realPart = melIn[offset:]
-            compPart = np.zeros((offset, melIn.shape[1]))
-            tempMel = np.concatenate([realPart, compPart]).reshape((-1, gd.SEG_CELLS, melIn.shape[1], 1))
-            labels[offset:] *= i
-            labels[offset:] += model.predict(tempMel, verbose=True).reshape(-1)[:len(labels)-offset] >= THRESHOLD
-            labels[offset:] /= i+1
-        labels = labels >= 2/3
-
-        for i in range(1, len(labels)-1):
-            labels[i] = (labels[i-1] and labels[i+1]) or (labels[i] and (labels[i-1] or labels[i+1]))  # remove singular (alone) cells
-
-        ranges = np.where(labels[:-1] != labels[1:])[0] + 1
-        isEven = len(ranges) % 2 == 0
-        if (isEven and labels[0]) or (not isEven and labels[0]):
-            ranges = np.concatenate([[0], ranges])
-        if (isEven and labels[0]) or (not isEven and not labels[0]):
-            ranges = np.concatenate([ranges, [len(labels)]])
-        ranges = ranges.reshape((-1, 2))
-
-        audio = sig.reshape((-1, gd.SEG_CELL_LEN))[labels].reshape(-1)
+        sig = loadSignal(fileName)
+        audio, ranges = optimizeSignal(sig)
 
         framesToGet = []
         videoLen = 0
         audioLen = 0
-        for r in ranges * (gd.SEG_CELL_LEN / gd.SAMPLE_RATE):
+        for r in ranges * (SEG_LEN / SAMPLE_RATE):
             sF = np.floor(r[0] * V_FPS)
             eF = np.ceil(r[1] * V_FPS)
             audioLen += r[1] - r[0]
@@ -158,12 +120,12 @@ with open(gd.DATASET_PATH, "rb") as dsFile:
         with open(".temp/vf", "w") as vff:
             vff.write(videoFilter)
 
-        p = subprocess.Popen([f"ffmpeg -y -i {str(fileName)} -an -vsync cfr -r {V_FPS} " +
+        p = subprocess.Popen([f"ffmpeg -y -i \"{str(fileName)}\" -an -vsync cfr -r {V_FPS} " +
                               f"-c:v hevc_nvenc -preset fast .temp/norm.mp4"], shell=True)
-        sf.write(f".temp/audio.wav", audio, gd.SAMPLE_RATE)
+        sf.write(f".temp/audio.wav", audio, SAMPLE_RATE)
         p.wait()
 
         subprocess.Popen([f"ffmpeg -y -i .temp/norm.mp4 -i .temp/audio.wav -c:v libx265 -preset ultrafast -filter_script:v .temp/vf " +
-                          f"-c:a aac -map 0:v:0 -map 1:a:0 -vsync cfr -r {V_FPS} optimized/{fileName.stem}_optimized.mp4"], shell=True).wait()
+                          f"-c:a aac -map 0:v:0 -map 1:a:0 -vsync cfr -r {V_FPS} \"optimized/{fileName.stem}_optimized.mp4\""], shell=True).wait()
 
     shutil.rmtree(".temp/")
