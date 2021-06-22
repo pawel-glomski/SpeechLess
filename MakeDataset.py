@@ -10,7 +10,7 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 OUT_DIR = str((Path.cwd()/'data').resolve())
-SRC_FILE = str((Path(OUT_DIR)/'sources.txt').resolve())
+SRC_FILE = str((Path(OUT_DIR)/'eval.txt').resolve())
 LANG = 'en'
 RES = '144p'
 ABR = '50kbps'
