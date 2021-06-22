@@ -1,4 +1,5 @@
 librosa
+pytube
 matplotlib
 numpy
 SoundFile
