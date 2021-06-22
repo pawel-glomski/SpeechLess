@@ -47,18 +47,15 @@ ABR = args.br
 
 
 def _progressCallback(stream, chunk, bytesRemaining):
-    print('_progressCallback')
-    # progress = 0
-    # while True:
-    #     newProgress = int((1 - bytesRemaining/stream.filesize)*100)
-    #     if progress != newProgress:
-    #         progress = newProgress
-    #         print('#', end='', flush=True)
-    #         yield
+    barLength = 20
+    percent = (1 - bytesRemaining/stream.filesize) * 100
+    arrow = '-' * int(percent/100 * barLength - 1) + '>'
+    arrow += ' ' * (barLength - len(arrow))
+    print(f'\rProgress: [{arrow}] {percent:.2f} % ', end='')
 
 
 def _completeCallback(stream, filepath):
-    print('_completeCallback')
+    print('Done')
 
 
 def _downloadCaptions(media, outName, outDir):
@@ -73,7 +70,7 @@ def _downloadCaptions(media, outName, outDir):
     assert captions is not None, f'No captions for language: {LANG}'
 
     outNameC = outName + '_c'
-    print('Downloading captions...', end='', flush=True)
+    print('Downloading captions...')
     captions.download(outNameC, srt=True, output_path=outDir)
     print('Done')
 
@@ -99,9 +96,8 @@ def _downloadAudio(media, outName, outDir):
     assert astream is not None, 'Logic error'
 
     outNameA = outName + '_a'
-    print('Downloading audio...', end='', flush=True)
+    print('Downloading audio...')
     astream.download(filename=outNameA, output_path=outDir)
-    print('Done')
 
 
 def _downloadVideo(media, outName, outDir):
@@ -128,9 +124,8 @@ def _downloadVideo(media, outName, outDir):
     assert vstream is not None, 'Logic error'
 
     outNameV = outName + '_v'
-    print('Downloading video...', end='', flush=True)
+    print('Downloading video...')
     vstream.download(filename=outNameV, output_path=outDir)
-    print('Done')
 
 
 def downloadFromYouTube(url, outDir):
@@ -178,5 +173,4 @@ def makeDataset():
 
 
 if __name__ == '__main__':
-    # pytube.request.default_range_size = 1048576
     makeDataset()
