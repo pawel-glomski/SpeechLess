@@ -29,8 +29,8 @@ def _inspectVidInfo(vidInfo, lang):
     subs = {sub['ext'] for sub in vidInfo['subtitles'].setdefault(lang, [])}
     if SUBTITLES_FORMAT in subs:
         return vidInfo['webpage_url']
-    logger.warn(f'Skipping {title} - No subtitles for language: "{lang}" '
-                f'in format: "{SUBTITLES_FORMAT}"')
+    logger.warning(f'Skipping {title} - No subtitles for language: "{lang}" '
+                   f'in format: "{SUBTITLES_FORMAT}"')
     return {}
 
 
@@ -45,7 +45,7 @@ def _inspectURL(ydl, url, lang):
         else:
             return [_inspectVidInfo(info, lang)]
     except Exception as e:
-        logger.warn(f'Skipping source: {url} - {str(e)}')
+        logger.warning(f'Skipping source: {url} - {str(e)}')
     return {}
 
 
@@ -93,15 +93,21 @@ if __name__ == '__main__':
     with open(srcPath, 'r') as srcFile:
         urls = _getURLs(srcFile, lang, jobs)
 
-    def download(url):
-        options = {'format': ('worstvideo,' if not audioOnly else '') + 'worstaudio',
-                   'outtmpl': f'{str(outPath)}/%(title)s-%(id)s/data.%(ext)s',
-                   'restrictfilenames': 'True',
-                   'writesubtitles': 'True',
-                   'subtitleslangs': [lang],
-                   'subtitlesformat': SUBTITLES_FORMAT}
-        with youtube_dl.YoutubeDL(options) as ydl:
-            ydl.download([url])
+    def download(url, retries=3):
+        try:
+            options = {'format': ('worstvideo,' if not audioOnly else '') + 'worstaudio',
+                       'outtmpl': f'{str(outPath)}/%(title)s-%(id)s/data.%(ext)s',
+                       'restrictfilenames': 'True',
+                       'writesubtitles': 'True',
+                       'subtitleslangs': [lang],
+                       'subtitlesformat': SUBTITLES_FORMAT}
+            with youtube_dl.YoutubeDL(options) as ydl:
+                ydl.download([url])
+        except Exception as e:
+            if retries > 0:
+                download(url, retries-1)
+            else:
+                logger.warning(f'Download error for url: {url}')
 
     with Pool(jobs) as pool:
         pool.map(download, urls)
