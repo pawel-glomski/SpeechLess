@@ -1,3 +1,0 @@
-
-gcc ./transcoding.c -I/mnt/Shared/Code/Cpp/ffmpeg -L/mnt/Shared/Code/Cpp/ffmpeg -lavformat -lavdevice -lavfilter -lpostproc -lswscale -lavcodec -lswresample -lavutil  -lm -lpthread -lva -lva-drm -lva-x11 -lvpx -lz -lx265 -lx264 -lvorbis -lvorbisenc -lmp3lame -lopus -lfdk-aac -lX11 -lgnutls -lass -lfreetype -lvdpau -ggdb -o transcoding
-./configure --extra-libs="-lpthread -lm" --ld="g++"   --bindir="$HOME/bin"   --enable-gpl   --enable-gnutls   --enable-libass   --enable-libfdk-aac   --enable-libfreetype   --enable-libmp3lame   --enable-libopus   --enable-libvorbis   --enable-libvpx   --enable-libx264   --enable-libx265   --enable-nonfree --extra-cflags="-gstabs+" --disable-optimizations --enable-debug=3

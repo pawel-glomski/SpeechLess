@@ -9,9 +9,10 @@ import librosa
 import subprocess
 import shutil
 
-TO_OPTIMIZE_DIR = (Path.cwd()/("../toOptimize" if Path.cwd().name == "src" else "toOptimize")).resolve()
+TO_OPTIMIZE_DIR = (Path.cwd()/("../toOptimize" if Path.cwd().name ==
+                   "src" else "toOptimize")).resolve()
 V_FPS = 15
-THRESHOLD = 1.2
+THRESHOLD = 1.5
 
 SAMPLE_RATE = 22050
 SEG_LEN = 512
@@ -31,7 +32,8 @@ def loadSignal(fileName):
 
 def calcIndicator(sig):
     # it generates one more for some reason
-    y = librosa.power_to_db(librosa.feature.melspectrogram(sig, sr=SAMPLE_RATE, n_fft=MEL_N_FFT, hop_length=MEL_HOP).T)[:-1]
+    y = librosa.power_to_db(librosa.feature.melspectrogram(
+        sig, sr=SAMPLE_RATE, n_fft=MEL_N_FFT, hop_length=MEL_HOP).T)[:-1]
     y -= np.median(y)
     y[y < 0] = 0
     y /= np.max(y)
@@ -84,8 +86,8 @@ def optimizeSignal(sig):
     for r in ranges:
         labels[r[0]:r[1]] = True
 
-    ranges = trueRanges(labels)
-    return (sig[labels].reshape(-1), ranges)
+    ranges = trueRanges(labels == False)
+    return (sig[labels].reshape(-1), ranges * (SEG_LEN / SAMPLE_RATE))
 
 
 if __name__ == "__main__":
@@ -95,37 +97,23 @@ if __name__ == "__main__":
 
         sig = loadSignal(fileName)
         audio, ranges = optimizeSignal(sig)
-
-        framesToGet = []
-        videoLen = 0
-        audioLen = 0
-        for r in ranges * (SEG_LEN / SAMPLE_RATE):
-            sF = np.floor(r[0] * V_FPS)
-            eF = np.ceil(r[1] * V_FPS)
-            audioLen += r[1] - r[0]
-            framesToAdd = np.min([np.round((audioLen - videoLen)*V_FPS), eF - sF])
-            if framesToAdd > 0:
-                videoLen += framesToAdd / V_FPS
-                if len(framesToGet) > 0 and framesToGet[-1][1] + 1 >= sF:
-                    framesToGet[-1][1] += framesToAdd
-                else:
-                    framesToGet.append([sF, sF+framesToAdd-1])
-        framesToGet = np.array(framesToGet, dtype=np.int32)
-
-        framesSelect = "\'" + "+".join([f"between(n,{seg[0]},{seg[1]})" for seg in framesToGet]) + "\'"
-        videoFilter = f"select={framesSelect},setpts=N/FR/TB"
-
+        length = np.sum(ranges[:, 1] - ranges[:, 0])
+        audio_len = audio.shape[0] / SAMPLE_RATE
         if not Path(".temp/").exists():
             Path(".temp/").mkdir()
-        with open(".temp/vf", "w") as vff:
-            vff.write(videoFilter)
 
-        p = subprocess.Popen([f"ffmpeg -y -i \"{str(fileName)}\" -an -vsync cfr -r {V_FPS} " +
-                              f"-c:v hevc_nvenc -preset fast .temp/norm.mp4"], shell=True)
+        with open('.temp/ranges.txt', 'w') as file:
+            file.write(';\n')  # use default out specs
+            for r in ranges:
+                file.write(f'{r[0]} {r[1]} 0.0\n')
+
+        p = subprocess.Popen([f'bin/editor "{str(fileName)}" ".temp/ranges.txt" ' +
+                              f'".temp/video.mp4"'], shell=True)
         sf.write(f".temp/audio.wav", audio, SAMPLE_RATE)
         p.wait()
-
-        subprocess.Popen([f"ffmpeg -y -i .temp/norm.mp4 -i .temp/audio.wav -c:v libx265 -preset ultrafast -filter_script:v .temp/vf " +
-                          f"-c:a aac -map 0:v:0 -map 1:a:0 -vsync cfr -r {V_FPS} \"optimized/{fileName.stem}_optimized.mp4\""], shell=True).wait()
-
-    shutil.rmtree(".temp/")
+        p = subprocess.Popen(['ffmpeg -y -i ".temp/video.mp4" -i ".temp/audio.wav" '
+                              '-map 0:v:0 -map 1:a:0 -codec:v copy '
+                              f'"optimized/{fileName.stem}_optimized.mp4"'], shell=True)
+        p.wait()
+    if Path(".temp/").exists():
+        shutil.rmtree(".temp/")
