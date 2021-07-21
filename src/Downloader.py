@@ -1,7 +1,6 @@
 import argparse
 import logging
 import youtube_dl
-import copy
 from multiprocessing import Pool, cpu_count
 from pathlib import Path
 from typing import List, Tuple
@@ -39,12 +38,12 @@ def downloadDataset(args: object) -> type(None):
 
     print('Downloading:')
     with Pool(args.jobs) as pool:
-        urls = pool.map(_downloadStream, [(url, args, OUT_SUB) for url in urls])
+        urls = pool.map(_downloadStream, [(url, OUT_SUB, args) for url in urls])
         urls = set(urls) - {''}
-        urls = pool.map(_downloadStream, [(url, args, OUT_AUD) for url in urls])
+        urls = pool.map(_downloadStream, [(url, OUT_AUD, args) for url in urls])
         urls = set(urls) - {''}
         if args.video:
-            urls = pool.map(_downloadStream, [(url, args, OUT_VID) for url in urls])
+            urls = pool.map(_downloadStream, [(url, OUT_VID, args) for url in urls])
             urls = set(urls) - {''}
     print('Finished downloading')
 
@@ -119,17 +118,17 @@ def _getValidURL(vidInfo: dict, lang: str) -> List[str]:
     return []
 
 
-def _downloadStream(url_args_type: Tuple[str, object, str]) -> str:
+def _downloadStream(url_args_type: Tuple[str, str, object]) -> str:
     """Download a stream of the specified type from the provided URL
 
-    :param url_args_type: URL, this module's args (defined in __main__ section of this file) and
-    type of stream to download
-    :type url_args_type: Tuple[str, object, str]
+    :param url_args_type: URL, type of stream to download, and this module's args (defined in
+    __main__ section of this file)
+    :type url_args_type: Tuple[str, str, object]
     :raises ConnectionError: When download is going too slow, restart the connection
     :return: The provided URL if successfully downloaded, empty string otherwise
     :rtype: str
     """
-    url, args, stype = url_args_type
+    url, stype, args = url_args_type
     lastGoodSpeedTime = 0
 
     def _progressCallback(progress):
@@ -185,23 +184,21 @@ def _download(url: str, options: dict, errPrefix: str = '') -> bool:
     :type url: str
     :param options: Download options for youtube-dl downloader
     :type options: dict
-    :param errPrefix: Prefix of error/warning message 
+    :param errPrefix: Prefix of error/warning message
     :type errPrefix: str
     :return: Whether successfully downloaded specified resource
     :rtype: bool
     """
-    retries = 1
+    retries = DOWNLOAD_RETRIES
     while retries > 0:
         with youtube_dl.YoutubeDL(options) as ydl:
             try:
                 ydl.download([url])
                 return True
-            except ConnectionError as e:
+            except youtube_dl.DownloadError as e:
                 logger.warning(errPrefix + str(e))
-                continue
-            except Exception as e:
-                logger.warning(errPrefix + str(e))
-                retries -= 1
+                if e.exc_info[0] is not ConnectionError:
+                    retries -= 1
     logger.error(errPrefix + f'Could not download the data after {DOWNLOAD_RETRIES} retries')
     return False
 
