@@ -1,6 +1,7 @@
-venv/
 .vscode/
-__pycache__
+*.egg-info/
 data/*
 !data/*.txt
-bin/
+.temp/
+
+__pycache__
