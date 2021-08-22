@@ -4,7 +4,7 @@ setup(
     name='speechless',
     version=open('VERSION').read().strip(),
     author='Paweł Głomski, Tomasz Rusinowicz, Jan Dorniak',
-    author_email='pavel.glomski@intel.com, axontom.online@gmail.com, JanDorniak99@gmail.com',
+    author_email='pavel.glomski@gmail.com, axontom.online@gmail.com, JanDorniak99@gmail.com',
     description='A tool for automated audio/video editing with speech processing capabilities',
     long_description=open('README.md', 'r', encoding='utf-8').read(),
     long_description_content_type='text/markdown',
