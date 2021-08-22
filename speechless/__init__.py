@@ -1,2 +1,2 @@
-from .editor import Editor
+from .editor import Editor, Range
 from .downloader import Downloader

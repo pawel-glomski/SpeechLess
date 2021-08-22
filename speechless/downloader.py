@@ -1,5 +1,4 @@
 import argparse
-import logging
 import youtube_dl
 from multiprocessing import Pool
 from logging import Logger
@@ -7,7 +6,6 @@ from pathlib import Path
 from typing import List
 
 from .utils import NULL_LOGGER
-
 
 SUBTITLES_FORMAT = 'vtt'
 QUERY_JOBS_MULTI = 4
@@ -19,48 +17,43 @@ OUT_SUB = 'subs'
 
 
 class Downloader:
-    DESCRIPTION = 'Downloads specified videos'
-    DEFAULT_ARGS = {'lang': 'en',
-                    'jobs': 4,
-                    'min': 0.1,
-                    'buffer': 0.5,
-                    'video': True}
-
-    def __init__(self, logger: Logger):
+    def __init__(self, dst: str, lang: str, jobs: int, minSpeed: float,
+                 bufferSize: float, withVideo: bool, logger: Logger = NULL_LOGGER):
+        self.dst = Path(dst).resolve()
+        self.lang = lang
+        self.jobs = jobs
+        self.minSpeed = minSpeed * 1024*1024
+        self.bufferSize = int(bufferSize * 1024*1024)
+        self.withVideo = withVideo
         self.logger = logger
 
-    def download(self, userArgs: dict) -> None:
+    def download(self, src: str) -> None:
         """Download the specified dataset
 
         Args:
-            args (dict): This submodule's args
+            src (str): Path to the file containing links of videos to download
         """
-        args = Downloader.DEFAULT_ARGS
-        args.update(userArgs)
-        args['src'] = args['src'].resolve()
-        args['dst'] = args['dst'].resolve()
-        args['min'] = args['min'] * 1024*1024
-        args['buffer'] = int(args['buffer'] * 1024*1024)
+        src = Path(src).resolve()
 
-        if not args['src'].is_file():
-            raise FileNotFoundError(f'Bad src file path: {args["src"]}')
+        if not src.is_file():
+            raise FileNotFoundError(f'Bad src file path: {src}')
 
-        self.logger.info(f'Checking the links provided in: {args["src"]}')
-        urls = self._getURLs(args['src'], args['lang'], args['jobs'] * QUERY_JOBS_MULTI)
-        self.logger.info(f'Finished checking links')
+        self.logger.info(f'Checking the links provided in: {src}')
+        urls = self._getURLs(src, self.lang, self.jobs * QUERY_JOBS_MULTI)
+        self.logger.info('Finished checking links')
 
         self.logger.info('Downloading:')
-        with Pool(args['jobs']) as pool:
-            urls = pool.starmap(self._downloadStream, [(url, OUT_SUB, args) for url in urls])
+        with Pool(self.jobs) as pool:
+            urls = pool.starmap(self._downloadStream, [(url, OUT_SUB) for url in urls])
             urls = set(urls) - {''}
-            urls = pool.starmap(self._downloadStream, [(url, OUT_AUD, args) for url in urls])
+            urls = pool.starmap(self._downloadStream, [(url, OUT_AUD) for url in urls])
             urls = set(urls) - {''}
-            if args['video']:
-                urls = pool.starmap(self._downloadStream, [(url, OUT_VID, args) for url in urls])
+            if self.withVideo:
+                urls = pool.starmap(self._downloadStream, [(url, OUT_VID) for url in urls])
                 urls = set(urls) - {''}
         self.logger.info('Finished downloading')
 
-        with open(args['dst']/'downloaded.txt', 'w') as file:
+        with open(self.dst/'downloaded.txt', 'w') as file:
             file.writelines([url+'\n' for url in urls])
 
     def _getURLs(self, srcPath: Path, lang: str, jobs: int) -> List[str]:
@@ -126,13 +119,12 @@ class Downloader:
                             f'in format: "{SUBTITLES_FORMAT}"')
         return []
 
-    def _downloadStream(self, url: str, stype: str, args: object) -> str:
+    def _downloadStream(self, url: str, stype: str) -> str:
         """Download a stream of the specified type from the provided URL
 
         Args:
             url (str): URL of stream to download
             stype (str): Type of stream to download
-            args (object): This module's args (defined in __main__ section of this file)
 
         Raises:
             ConnectionError: When download is going too slow, restart the connection
@@ -147,7 +139,7 @@ class Downloader:
             nonlocal lastGoodSpeedTime
             if progress['status'] == 'downloading':
                 speed = progress['speed']
-                if speed > args['min']:
+                if speed > self.minSpeed:
                     lastGoodSpeedTime = progress['elapsed']
                 if (progress['elapsed'] - lastGoodSpeedTime > SLOW_DOWNLOAD_TIMEOUT
                         and progress['eta'] > 15):
@@ -158,30 +150,30 @@ class Downloader:
         common_options = {'logger': NULL_LOGGER,
                           'restrictfilenames': 'True',
                           'progress_hooks': [_progressCallback],
-                          'buffersize': args['buffer']}
+                          'buffersize': self.bufferSize}
 
         if stype == OUT_SUB:
             if self._download(url, {**common_options,
-                                    'outtmpl': dstPath.format(args['dst'], OUT_SUB),
+                                    'outtmpl': dstPath.format(self.dst, OUT_SUB),
                                     'skip_download': 'True',
                                     'writesubtitles': 'True',
-                                    'subtitleslangs': [args['lang']],
+                                    'subtitleslangs': [self.lang],
                                     'subtitlesformat': SUBTITLES_FORMAT},
                               f'[ SUB ] {url} - '):
                 self.logger.info(f'[ SUB ] {url}')
                 return url
         elif stype == OUT_AUD:
             if self._download(url, {**common_options,
-                                    'outtmpl': dstPath.format(args['dst'], OUT_AUD),
+                                    'outtmpl': dstPath.format(self.dst, OUT_AUD),
                                     'format': 'worstaudio'},
                               f'[ AUD ] {url} - '):
                 self.logger.info(f'[ AUD ] {url}')
                 return url
         elif stype == OUT_VID:
-            assert args['video'], 'Tried to download a video stream, without the --video flag'
+            assert self.withVideo, 'Tried to download a video stream, without the --video flag'
             if self._download(url, {**common_options,
-                                    'outtmpl': dstPath.format(args['dst'], OUT_VID),
-                                    'format': 'worst[height>240]'},
+                                    'outtmpl': dstPath.format(self.dst, OUT_VID),
+                                    'format': 'worst'},
                               f'[ VID ] {url} - '):
                 self.logger.info(f'[ VID ] {url}')
                 return url
@@ -216,39 +208,67 @@ class Downloader:
             self.logger.error(errPrefix + 'Skipping')
         return False
 
-    @staticmethod
-    def setupArgParser(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
-        """Creates CLI argument parser for downloader submodule
 
-        Returns:
-            argparse.ArgumentParser: Argument parser of this submodule
-        """
-        parser.description = Downloader.DESCRIPTION
-        parser.add_argument('src',
-                            help=f'Path to the file with links to videos',
-                            type=Path, action='store')
-        parser.add_argument('dst',
-                            help=f'Destination directory for downloaded videos',
-                            type=Path, action='store')
-        parser.add_argument('-l', '--lang',
-                            help=f'Language used in the videos',
-                            type=str, action='store', default=Downloader.DEFAULT_ARGS['lang'])
-        parser.add_argument('-j', '--jobs',
-                            help=f'Number of threads to use for downloading',
-                            type=int, action='store', default=Downloader.DEFAULT_ARGS['jobs'])
-        parser.add_argument('-m', '--min',
-                            help=f'Minimum download speed to reset the connection [MiB]',
-                            type=float, action='store', default=Downloader.DEFAULT_ARGS['min'])
-        parser.add_argument('-b', '--buffer',
-                            help=f'Download buffer size [MiB]',
-                            type=float, action='store', default=Downloader.DEFAULT_ARGS['buffer'])
-        parser.add_argument('-v', '--video',
-                            help=f'Download also video stream',
-                            action='store_true', default=Downloader.DEFAULT_ARGS['video'])
-        parser.set_defaults(run=run)
-        return parser
+DESCRIPTION = 'Downloads specified videos'
+ARG_SRC = 'src'
+ARG_DST = 'dst'
+ARG_LANG = 'lang'
+ARG_JOBS = 'jobs'
+ARG_MIN_SPEED = 'min_speed'
+ARG_BUFFER_SIZE = 'buffer_size'
+ARG_WITH_VIDEO = 'with_video'
+DEFAULT_ARGS = {ARG_LANG: 'en',
+                ARG_JOBS: 4,
+                ARG_MIN_SPEED: 0.1,
+                ARG_BUFFER_SIZE: 0.5,
+                ARG_WITH_VIDEO: False}
 
 
-def run(args: object, logger: Logger) -> None:
-    dl = Downloader(logger)
-    dl.download(args.__dict__)
+def setupArgParser(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
+    """Creates CLI argument parser for downloader submodule
+
+    Returns:
+        argparse.ArgumentParser: Argument parser of this submodule
+    """
+    parser.description = DESCRIPTION
+    parser.add_argument(ARG_SRC,
+                        help='Path of the file with links to videos',
+                        type=str, action='store')
+    parser.add_argument(ARG_DST,
+                        help='Path of the destination directory for downloaded videos',
+                        type=str, action='store')
+    parser.add_argument('-l', f'--{ARG_LANG}',
+                        help='Language used in the videos',
+                        type=str, action='store', default=DEFAULT_ARGS[ARG_LANG])
+    parser.add_argument('-j', f'--{ARG_JOBS}',
+                        help='Number of threads to use for downloading',
+                        type=int, action='store', default=DEFAULT_ARGS[ARG_JOBS])
+    parser.add_argument('-m', f'--{ARG_MIN_SPEED}',
+                        help='Minimum download speed to reset the connection [MiB]',
+                        type=float, action='store', default=DEFAULT_ARGS[ARG_MIN_SPEED])
+    parser.add_argument('-b', f'--{ARG_BUFFER_SIZE}',
+                        help='Download buffer size [MiB]',
+                        type=float, action='store', default=DEFAULT_ARGS[ARG_BUFFER_SIZE])
+    parser.add_argument('-v', f'--{ARG_WITH_VIDEO}',
+                        help='Download also video stream',
+                        action='store_true', default=DEFAULT_ARGS[ARG_WITH_VIDEO])
+    parser.set_defaults(run=runSubmodule)
+    return parser
+
+
+def runSubmodule(args: object, logger: Logger) -> None:
+    """Runs this submodule
+
+    Args:
+        args (object): Arguments of this submodule (defined in Downloader.setupArgParser)
+        logger (Logger): Logger
+    """
+    args = args.__dict__
+    dl = Downloader(dst=args[ARG_DST],
+                    lang=args[ARG_LANG],
+                    jobs=args[ARG_JOBS],
+                    minSpeed=args[ARG_MIN_SPEED],
+                    bufferSize=args[ARG_BUFFER_SIZE],
+                    withVideo=args[ARG_WITH_VIDEO],
+                    logger=logger)
+    dl.download(args[ARG_SRC])

@@ -1,9 +1,7 @@
 import logging
 import argparse
 
-from .downloader import Downloader
-from .editor import Editor
-
+from speechless import downloader, editor
 
 SUBMODULES = ['editor', 'classifier', 'recogniser', 'downloader', 'trainer']
 
@@ -11,11 +9,11 @@ SUBMODULES = ['editor', 'classifier', 'recogniser', 'downloader', 'trainer']
 def main():
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     subparsers = parser.add_subparsers(title='submodule')
-    Downloader.setupArgParser(subparsers.add_parser('downloader', help=Downloader.DESCRIPTION))
-    Editor.setupArgParser(subparsers.add_parser('editor', help=Editor.DESCRIPTION))
+    downloader.setupArgParser(subparsers.add_parser('downloader', help=downloader.DESCRIPTION))
+    editor.setupArgParser(subparsers.add_parser('editor', help=editor.DESCRIPTION))
     # args = parser.parse_args()
     args = parser.parse_args()
-    
+
     # TODO: set verbosity level
     logging.basicConfig(level=logging.INFO,
                         handlers=[logging.StreamHandler()],
@@ -23,7 +21,6 @@ def main():
                         datefmt='%Y-%m-%d %H:%M:%S')
 
     args.run(args, logging.getLogger())
-
 
 
 if __name__ == '__main__':

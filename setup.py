@@ -4,23 +4,23 @@ setup(
     name='speechless',
     version=open('VERSION').read().strip(),
     author='Paweł Głomski, Tomasz Rusinowicz, Jan Dorniak',
-    author_email='pavel.glomski@intel.com, axontom.online@gmail.com, ',
+    author_email='pavel.glomski@intel.com, axontom.online@gmail.com, JanDorniak99@gmail.com',
     description='A tool for automated audio/video editing with speech processing capabilities',
     long_description=open('README.md', 'r', encoding='utf-8').read(),
     long_description_content_type='text/markdown',
-    license='', # TODO
+    license='',  # TODO
     url='https://github.com/Exepp/SpeechLess/',
-    
-    packages = find_packages(exclude=['tests*']),
+
+    packages=find_packages(exclude=['tests*']),
     python_requires='>=3.6.0',
     install_requires=['av', 'pytsmod', 'librosa', 'youtube-dl', 'deepspeech', 'numpy'],
     test_suite='tests',
     entry_points={
-      'console_scripts':  [
+        'console_scripts':  [
             'speechless = speechless.main:main'
         ]
     },
-    
+
     classifiers=[
         'Intended Audience :: Developers',
         'Development Status :: 2 - Pre-Alpha',

@@ -1,0 +1,18 @@
+{
+    "specs":{
+        "video": { "codec_options": { "crf": "40", 
+                                      "profile": "high" },
+                   "maxfps": 120 },
+
+        "1": { "resolution": [256, 144],
+               "maxfps": 15 },
+
+        "audio": { "codec": "aac",
+                   "bitrate": 128000,
+                   "samplerate": 44100,
+                   "mono": "true" }
+    },
+    "ranges": [ 
+    [0, Infinity, 0.5] 
+]
+}

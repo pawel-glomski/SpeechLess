@@ -1,291 +1,508 @@
 import av
 import json
-import logging
 import argparse
 import numpy as np
 import pytsmod as tsm
-from typing import List
+
+from collections import OrderedDict
+from typing import List, Tuple
 from fractions import Fraction
+from logging import Logger
 from pathlib import Path
 
-Real = np.double
-Int = np.int64
+from .utils import Real, rangesOfEquality, intLinspaceStepsByLimit
 
 VIDEO_STREAM_TYPE = 'video'
 AUDIO_STREAM_TYPE = 'audio'
 SUPPORTED_STREAM_TYPES = [VIDEO_STREAM_TYPE, AUDIO_STREAM_TYPE]
+
 DROP_FRAME_PTS = -1
-AUDIO_WINDOW = 30  # in seconds
+
+AUD_WIN_TYPE = 'hann'
+AUD_WIN_SIZE = 1024
+AUD_HOP_SIZE = int(AUD_WIN_SIZE/4)
+AUD_WS_PAD_SIZE = 1*AUD_WIN_SIZE
+AUD_WS_SIZE_MAX = AUD_WS_PAD_SIZE + 1000*AUD_WIN_SIZE + AUD_WS_PAD_SIZE
+AUD_VFRAME_SIZE_MAX = 10*1024
 
 
-def seekBeginning(container):
-    container.seek(np.iinfo(Int).min, backward=True, any_frame=False)
+def seekBeginning(stream):
+    stream.container.seek(np.iinfo(np.int32).min, stream=stream, backward=True, any_frame=False)
+
+
+class Range:
+    @staticmethod
+    def fromNumpy(arr: np.ndarray) -> List[np.ndarray]:
+        return [Range(*r, 0.0) for r in arr]
+
+    def __init__(self, beg, end, multi) -> None:
+        self.beg = beg
+        self.end = end
+        self.multi = multi
+
+    @property
+    def beg(self):
+        return self._beg
+
+    @beg.setter
+    def beg(self, value):
+        self._beg = Real(value) if value is not None else None
+
+    @property
+    def end(self):
+        return self._end
+
+    @end.setter
+    def end(self, value):
+        self._end = Real(value) if value is not None else None
+
+    @property
+    def multi(self):
+        return self._multi
+
+    @multi.setter
+    def multi(self, value):
+        self._multi = Real(value) if value is not None else None
+
+
+class EditCtx:
+    def __init__(self, srcStream, dstStream):
+        self.srcStream = srcStream
+        self.dstStream = dstStream
+        self.isDone = False
+
+    def __bool__(self):
+        return self.isDone
+
+    def _prepareSrcDurs(self) -> np.ndarray:
+        """Collects pts of each frame """
+        seekBeginning(self.srcStream)
+        pts = []
+        for packet in self.srcStream.container.demux(self.srcStream):
+            if packet.dts is not None:
+                pts.append(packet.pts)
+        if len(pts) < 2:  # there must be at least 2 frames
+            return [], False
+
+        pts = sorted(set(pts))
+        # convert to seconds and set the end frame pts
+        pts = np.array(pts, dtype=Real) * Real(self.srcStream.time_base)
+        durs = pts[1:] - pts[:-1]
+        # add virtual empty first frame that lasts until the first real frame
+        virtualFirst = ([pts[0]] if pts[0] > 0 else [])
+        # assume duration of the last frame is equal to the average duration of real frames
+        return (np.concatenate([virtualFirst, durs, [np.mean(durs)]], dtype=Real),
+                len(virtualFirst) == 1)
+
+    def _prepareRawDstDurations(self, srcDurs: np.ndarray, ranges: List[Range]) -> np.ndarray:
+        dstDurs = []
+        rIdx = 0
+        frEnd = Real(0)
+        srcStreamEnd = np.sum(srcDurs, dtype=Real)
+        for oldDur in srcDurs:
+            frBeg = frEnd
+            frEnd = frBeg + oldDur
+            newDur = 0
+
+            while rIdx < len(ranges) and frBeg < ranges[rIdx].end and frEnd > ranges[rIdx].beg:
+                clampedBeg = np.max([ranges[rIdx].beg, frBeg])
+                clampedEnd = np.min([ranges[rIdx].end, frEnd])
+                partDur = clampedEnd - clampedBeg
+                assert np.round(oldDur - partDur, 12) >= 0
+
+                oldDur -= partDur
+                newDur += partDur * ranges[rIdx].multi
+                if clampedEnd < ranges[rIdx].end:
+                    # this range extends beyond this frame (was clamped), move to the next frame
+                    break
+                else:
+                    # this range ends on this frame (wasn't clamped), move to the next range
+                    rIdx += 1
+            newDur += oldDur
+
+            # early stop when the recording has trimmed end
+            if newDur == 0 and rIdx < len(ranges) and ranges[rIdx].end >= srcStreamEnd:
+                break
+            dstDurs.append(newDur)
+
+        return np.array(dstDurs, dtype=Real) if len(dstDurs) >= 2 else np.array([])
+
+
+class VidCtx(EditCtx):
+    def __init__(self, srcStream, dstStream, maxFPS: float):
+        super().__init__(srcStream, dstStream)
+        self.maxFPS = maxFPS
+        self.frIdx = 0
+        self.dstPTS = None
+
+    def prepareTimelineEdits(self, ranges: List[Range]) -> bool:
+        # return False
+        durs, virtualFirst = self._prepareSrcDurs()
+        if len(durs) == 0:
+            return False
+
+        if len(ranges) > 0:
+            durs = self._prepareRawDstDurations(durs, ranges)
+            durs = self._constrainRawDstDurations(durs)
+            if len(durs) == 0 or np.sum(durs) == 0:
+                return False
+
+        self.dstPTS = np.concatenate([[0], np.cumsum(durs[:-1])])
+        self.dstPTS[durs <= 0] = DROP_FRAME_PTS
+
+        # if first frame is virtual, discard it
+        if virtualFirst:
+            self.dstPTS = self.dstPTS[1:]
+
+        return len(self.dstPTS) > 0
+
+    def _constrainRawDstDurations(self, dstDurs: np.ndarray) -> np.ndarray:
+        minimalDur = Real(1/self.maxFPS)
+        lastNZ = None
+        for i, dur in enumerate(dstDurs):
+            if dur <= 0 or dur >= minimalDur:
+                continue
+            if lastNZ is None:
+                lastNZ = i
+            elif dur < minimalDur:
+                dstDurs[lastNZ] += dur
+                dstDurs[i] = Real(0)
+                if dstDurs[lastNZ] >= minimalDur:
+                    # move the surplus to the current frame
+                    surplus = dstDurs[lastNZ] - minimalDur
+                    dstDurs[lastNZ] = minimalDur
+                    dstDurs[i] = surplus
+                    lastNZ = i if surplus > 0.0 else None
+        # introduce a "small" desync: (0, minimalDur/2> in order to stay true to the max fps
+        if lastNZ is not None:
+            assert dstDurs[lastNZ] < minimalDur
+            dstDurs[lastNZ] = np.round(dstDurs[lastNZ] / minimalDur) * minimalDur
+        return dstDurs if np.sum(dstDurs) > 0 else np.array([])
+
+    def decodeEditEncode(self, srcPacket: av.Packet) -> List[av.Packet]:
+        for frame in srcPacket.decode():
+            frIdx = self.frIdx
+            self.frIdx += 1
+            self.isDone = (self.frIdx == len(self.dstPTS))
+            if self.dstPTS[frIdx] != DROP_FRAME_PTS:
+                frame.pts = int(round(self.dstPTS[frIdx] / frame.time_base))
+                frame.pict_type = av.video.frame.PictureType.NONE
+                yield self.dstStream.encode(frame)
+
+
+class AudCtx(EditCtx):
+    class Workspace:
+        @staticmethod
+        def createWorkspaces(srcDurs: np.ndarray, dstDurs: np.ndarray,
+                             wsRange: Tuple[int, int]) -> List['AudCtx.Workspace']:
+            """Creates workspaces for a specified range of frames. The range should already include
+            padding frames.
+
+            Args:
+                srcDurs (np.ndarray): Durations of the original frames
+                dstDurs (np.ndarray): Durations of the edited frames
+                wsRange (Tuple[int, int]): Range of frames, including the padding frames
+
+            Returns:
+                List['AudCtx.Workspace']: Workspaces for the specified range
+            """
+            wsRanges = AudCtx.Workspace.splitWsRange(srcDurs, wsRange)
+            assert len(wsRanges) > 0
+
+            workspaces = []
+            if len(wsRanges) == 1:
+                workspaces.append(AudCtx.Workspace(srcDurs, dstDurs, wsRange, True, True))
+            else:
+                workspaces.append(AudCtx.Workspace(srcDurs, dstDurs, wsRanges[0], True, False))
+                for subWsRange in wsRanges[1:-1]:
+                    workspaces.append(AudCtx.Workspace(srcDurs, dstDurs, subWsRange, False, False))
+                workspaces.append(AudCtx.Workspace(srcDurs, dstDurs, wsRanges[-1], False, True))
+                for ws, nextWs in zip(workspaces[:-1], workspaces[1:]):
+                    ws.nextWorkspace = nextWs
+            return workspaces
+
+        @staticmethod
+        def splitWsRange(srcDurs: np.ndarray, wsRange: Tuple[int, int]) -> List[Tuple[int, int]]:
+            assert wsRange[0] < wsRange[1]
+            start, end = wsRange
+
+            wsRanges = []
+            rangeSamples = np.sum(srcDurs[start:end])
+            for targetWsSize in intLinspaceStepsByLimit(0, rangeSamples, AUD_WS_SIZE_MAX):
+                wsSize = 0
+                for frIdx in range(start, end):
+                    wsSize += srcDurs[frIdx]
+                    if wsSize >= targetWsSize:
+                        break
+                wsRanges.append((start, frIdx + 1))
+                start = frIdx + 1
+                if start == end:
+                    break
+            return wsRanges
+
+        @staticmethod
+        def modifyWsRange(durs: np.ndarray, wsRange: Tuple[int, int],
+                          changes: Tuple[int, int]) -> Tuple[int, int]:
+            """Expands or contracts the range of a workspace by a specified number of samples for 
+            each side. This operates on frames, so the number of added/removed samples will be equal
+            to or greater (but never less) than specified (which would be 2*`samples`).
+
+            Args:
+                durs: (np.ndarray): Array with durations of frames
+                wsRange (int): Range of a workspace
+                changes (Tuple[int, int]): Number of samples to add to or remove from each side of 
+                the range: (leftSide, rightSide) 
+
+            Returns:
+                Tuple[int, int]: Modified range
+            """
+            assert wsRange[0] < wsRange[1]
+            wsRangeInclusive = (wsRange[0], wsRange[1] - 1)
+            directions = np.sign(changes) * np.array([-1, 1])
+            starts = np.array(wsRangeInclusive) + directions*(np.sign(changes) > 0)
+
+            modified = [*wsRange]
+            for sideIdx, direction in enumerate(directions):
+                targetSamples = changes[sideIdx]
+                start = starts[sideIdx]
+                if targetSamples > 0:
+                    end = len(durs) if direction == 1 else -1
+                elif targetSamples < 0:
+                    end = wsRange[1] if direction == 1 else wsRange[0] - 1
+                if targetSamples == 0 or start == end:
+                    continue
+
+                samples = 0
+                for frIdx in range(start, end, direction):
+                    samples += durs[frIdx]
+                    if samples >= abs(targetSamples):
+                        break
+
+                if targetSamples > 0:
+                    modified[sideIdx] = frIdx + (direction > 0)
+                else:
+                    modified[sideIdx] = frIdx + direction
+            modified = (min(modified), max(modified))
+            assert modified[0] < modified[1]
+            return modified
+
+        def __init__(self, srcDurs: np.ndarray, dstDurs: np.ndarray, wsRange: Tuple[int, int],
+                     encodeLeftPad: bool, encodeRightPad: bool):
+            """Creates a workspace for a specified range of frames.
+
+            Args:
+                srcDurs (np.ndarray): Durations of all the original frames
+                dstDurs (np.ndarray): Durations of all the edited frames
+                wsRange (Tuple[int, int]): Range of frames
+                encodeLeftPad (bool): Should this workspace encode the left padding during
+                editing. When True, wsRange should already include the left padding
+                encodeRightPad (bool): Should this workspace encode the right padding during
+                editing. When True, wsRange should already include the right padding
+            """
+            leftChange = (-1 if encodeLeftPad else 1) * AUD_WS_PAD_SIZE
+            rightChange = (-1 if encodeRightPad else 1) * AUD_WS_PAD_SIZE
+            encWsRange = AudCtx.Workspace.modifyWsRange(srcDurs, wsRange,
+                                                        (leftChange, rightChange))
+            leftPadding = min(wsRange[0], encWsRange[0]), max(wsRange[0], encWsRange[0])
+            rightPadding = min(wsRange[1], encWsRange[1]), max(wsRange[1], encWsRange[1])
+            begIdx, endIdx = leftPadding[0], rightPadding[1]
+
+            # there are 4 main sample points: [0, 0 + leftPadding, end - rightPadding, end]
+            samplePoints = [[], []]
+
+            # sample points (before edit):
+            srcBegSP = 0
+            srcEndSP = np.sum(srcDurs[begIdx: endIdx])
+            srcLeftPad = np.sum(srcDurs[leftPadding[0]:leftPadding[1]])
+            srcRightPad = np.sum(srcDurs[rightPadding[0]:rightPadding[1]])
+
+            # sample points (after edit):
+            dstBegSP = 0
+            dstEndSP = np.sum(dstDurs[begIdx: endIdx])
+            dstLeftPad = np.sum(dstDurs[leftPadding[0]:leftPadding[1]])
+            dstRightPad = np.sum(dstDurs[rightPadding[0]:rightPadding[1]])
+
+            samples = 0
+            srcInbetweenSP = [0 + srcLeftPad, 0 + srcLeftPad]
+            dstInbetweenSP = [0 + dstLeftPad, 0 + dstLeftPad]
+            for frIdx in range(leftPadding[1], rightPadding[0]):
+                samples += dstDurs[frIdx]
+                srcInbetweenSP[-1] += srcDurs[frIdx]
+                dstInbetweenSP[-1] += dstDurs[frIdx]
+                if ((dstEndSP - dstRightPad) - dstInbetweenSP[-1]) < 2*AUD_WIN_SIZE:
+                    break
+                if samples >= 2*AUD_WIN_SIZE:
+                    srcInbetweenSP.append(srcInbetweenSP[-1])
+                    dstInbetweenSP.append(dstInbetweenSP[-1])
+                    samples = 0
+            srcInbetweenSP[-1] = srcEndSP - srcRightPad
+            dstInbetweenSP[-1] = dstEndSP - dstRightPad
+            assert (srcInbetweenSP[-2] <= srcInbetweenSP[-1] and
+                    dstInbetweenSP[-2] <= dstInbetweenSP[-1])
+
+            samplePoints[0] = sorted(set([srcBegSP] + srcInbetweenSP + [srcEndSP - 1]))
+            samplePoints[1] = sorted(set([dstBegSP] + dstInbetweenSP + [dstEndSP - 1]))
+
+            self.beg = begIdx
+            self.end = endIdx
+            self.leftPad = dstLeftPad
+            self.rightPad = dstRightPad
+            self.encodeLeftPad = encodeLeftPad
+            self.encodeRightPad = encodeRightPad
+            self.samplePoints = np.array(samplePoints, dtype=int)
+            self.frameCache = OrderedDict()  # frIdx -> frameData
+            self.frameTemplate = None  # first pushed frame
+            self.nextWorkspace = None
+
+        def pushFrame(self, frIdx: int, frame: av.AudioFrame, frameData: np.ndarray) -> bool:
+            assert frIdx < self.end
+            if frIdx < self.beg:
+                return False
+
+            if frameData is None:
+                frameData = frame.to_ndarray()
+            if len(self.frameCache) == 0:
+                self.frameTemplate = frame
+            self.frameCache[frIdx] = frameData
+            return True
+
+        def pullFrame(self) -> av.AudioFrame:
+            if (self.end - 1) not in self.frameCache:
+                return None
+
+            sig = np.concatenate(list(self.frameCache.values()), axis=1)
+            sig = tsm.wsola(sig, self.samplePoints, AUD_WIN_TYPE, AUD_WIN_SIZE, AUD_HOP_SIZE)
+
+            if not self.encodeLeftPad:
+                sig = sig[:, self.leftPad:]
+            if not self.encodeRightPad:
+                sig = sig[:, :-self.rightPad]
+
+                # transfer common frames to the next workspace
+                assert self.nextWorkspace is not None and len(self.nextWorkspace.frameCache) == 0
+                commonFrames = [(frIdx, self.frameCache[frIdx]) for frIdx in
+                                range(self.nextWorkspace.beg, self.end) if frIdx in self.frameCache]
+                self.nextWorkspace.frameCache = OrderedDict(commonFrames)
+                self.nextWorkspace.frameTemplate = self.frameTemplate
+
+            dtype = next(iter(self.frameCache.values())).dtype
+            return AudCtx._createFrame(self.frameTemplate, sig.astype(dtype))
+
+    @staticmethod
+    def _createFrame(template, data):
+        frame = av.AudioFrame.from_ndarray(data, template.format.name,
+                                           template.layout.name)
+        frame.sample_rate = template.sample_rate
+        frame.time_base = template.time_base
+        frame.pts = None
+        return frame
+
+    def __init__(self, srcStream, dstStream):
+        super().__init__(srcStream, dstStream)
+        self.workspaces = []  # sorted (by pts) workspaces
+        self.dstVFrames = []
+        self.dstFramesNo = None
+        self.deletedFrames = {}
+        self.past = None
+        self.frIdx = 0
+
+    def prepareTimelineEdits(self, ranges: List[Range]):
+        # return False
+        srcDurs, firstVirtual = self._prepareSrcDurs()
+        if len(srcDurs) == 0:
+            return False
+
+        if len(ranges) > 0:
+            dstDurs = self._prepareRawDstDurations(srcDurs, ranges)
+
+            # convert from seconds to samples
+            srcDurs = (srcDurs[:len(dstDurs)] * self.srcStream.sample_rate).astype(int)
+            dstDurs = (dstDurs * self.srcStream.sample_rate).astype(int)
+            self.deletedFrames = set(np.argwhere(dstDurs == 0).squeeze().tolist())
+            self.dstFramesNo = len(dstDurs)
+
+            if len(dstDurs) == 0 or len(self.deletedFrames) == len(dstDurs):
+                return False
+
+            # PyAV expects the audio streams to start at 0, so the virtual first frame (if present)
+            # will be actually encoded - if its too big, it must be split into many frames
+            if len(dstDurs) > 0:
+                if firstVirtual:
+                    self.dstVFrames = intLinspaceStepsByLimit(0, dstDurs[0], AUD_VFRAME_SIZE_MAX)
+                    # srcVFrames = intLinspaceStepsByNo(0, srcDurs[0], len(self.dstVFrames))
+                    dstDurs = np.concatenate([self.dstVFrames, dstDurs[1:]])
+                    srcDurs = np.concatenate([self.dstVFrames, srcDurs[1:]])
+                self.workspaces = self._prepareWorkspaces(srcDurs, dstDurs)
+        # there must be at lease one valid frame
+        return len(dstDurs) > 0
+
+    def _prepareWorkspaces(self, srcDurs: np.ndarray, dstDurs: np.ndarray):
+        toEdit = srcDurs[:len(dstDurs)] != dstDurs
+        srcDurs[dstDurs == 0] = 0  # deleted frames will not be included in workspaces
+
+        for wsRange in rangesOfEquality(toEdit):
+            # extend the ranges by padding (this might merge adjacent ranges into one)
+            ext = AudCtx.Workspace.modifyWsRange(srcDurs, wsRange,
+                                                 (AUD_WS_PAD_SIZE, AUD_WS_PAD_SIZE))
+            assert ext[0] <= wsRange[0] < wsRange[1] <= ext[1]
+            toEdit[ext[0]:wsRange[0]] = True
+            toEdit[wsRange[1]:ext[1]] = True
+
+        return [ws for wsRange in rangesOfEquality(toEdit) for ws in
+                AudCtx.Workspace.createWorkspaces(srcDurs, dstDurs, wsRange)]
+
+    def decodeEditEncode(self, srcPacket: av.Packet) -> List[av.Packet]:
+        for frIdx, frame, frameData in self._decode(srcPacket):
+            self.isDone = frIdx + 1 >= self.dstFramesNo
+
+            if frame is None:
+                continue
+            if len(self.workspaces) > 0:
+                if self.workspaces[0].pushFrame(frIdx, frame, frameData):
+                    frame = self.workspaces[0].pullFrame()
+                    if frame is None:
+                        assert not self.isDone
+                        continue
+                    self.workspaces.pop(0)
+            yield self.dstStream.encode(frame)
+
+    def _decode(self, srcPacket: av.Packet) -> Tuple[int, av.AudioFrame, np.ndarray]:
+        frames = srcPacket.decode()
+        if self.frIdx < len(self.dstVFrames) and len(frames) > 0:
+            srcFrame = frames[0]
+            srcData = srcFrame.to_ndarray()
+            while self.frIdx < len(self.dstVFrames):
+                frIdx = self.frIdx
+                self.frIdx += 1
+
+                if frIdx in self.deletedFrames:
+                    yield frIdx, None, None
+                    continue
+
+                data = np.zeros((srcData.shape[0], self.dstVFrames[frIdx]), dtype=srcData.dtype)
+                vFrame = AudCtx._createFrame(srcFrame, data)
+                yield frIdx, vFrame, data
+
+        for frame in frames:
+            frIdx = self.frIdx
+            self.frIdx += 1
+
+            if frIdx in self.deletedFrames:
+                yield frIdx, None, None
+                continue
+
+            frame.pts = None
+            yield frIdx, frame, None
 
 
 class Editor:
-    DESCRIPTION = 'Edits recordings according to the specification'
-    DEFAULT_ARGS = {}
-
-    class VidCtx:
-        def __init__(self, srcStream, dstStream, maxFPS):
-            self.srcStream = srcStream
-            self.dstStream = dstStream
-            self.maxFPS = maxFPS
-            self.dstFrPTS = None
-
-        def captureEditData(self):
-            assert self.dstFrPTS is None
-            dstFrPTS = []
-            # collect pts of each packet
-            seekBeginning(self.srcStream.container)
-            for packet in self.srcStream.container.demux(self.srcStream):
-                if packet.dts is not None:
-                    dstFrPTS.append(packet.pts)
-
-            # sort pts and convert to seconds
-            dstFrPTS = sorted(set(dstFrPTS))
-            dstFrPTS.append(dstFrPTS[-1])  # add dummy end frame
-            dstFrPTS = np.array(dstFrPTS, dtype=Real) * Real(self.srcStream.time_base)
-            dstFrPTS[-1] += np.mean(dstFrPTS[1:] - dstFrPTS[:-1])  # fix end
-            self.dstFrPTS = dstFrPTS
-
-        def applyEditRanges(self, ranges: List[List[Real]]):
-            if len(ranges) == 0:
-                return True
-            streamStart = self.srcStream.start_time * self.srcStream.time_base
-
-            # prepare modified durations of frames
-            durs = []
-            # move to the relevant ranges
-            for eRangeIdx, eRange in enumerate(ranges):
-                if eRange[1] > streamStart:
-                    eRange[0] = max(eRange[0], streamStart)
-                    break
-            if eRange[1] <= streamStart:
-                return True # no edits to make
-
-            for pts, nextPTS in zip(self.dstFrPTS[:-1], self.dstFrPTS[1:]):
-                oldDur = nextPTS - pts
-                newDur = 0
-
-                while eRange[0] < nextPTS and eRangeIdx < len(ranges):
-                    assert eRange[0] >= pts
-
-                    clampedEnd = min(eRange[1], nextPTS)
-                    partDur = clampedEnd - eRange[0]
-                    assert partDur <= oldDur
-
-                    oldDur -= partDur
-                    newDur += partDur * eRange[2]
-                    if clampedEnd < eRange[1]:
-                        eRange[0] = nextPTS
-                        break
-                    else:
-                        eRangeIdx += 1
-                        eRange = ranges[eRangeIdx]
-
-                newDur += oldDur
-
-                # early stop when the recording has trimmed end
-                if newDur == 0 and eRange[1] >= self.dstFrPTS[-1]:
-                    break
-                durs.append(newDur)
-
-            durs = np.array(durs)
-
-            # collapse too small frames
-            minimalDur = Real(1/self.maxFPS)
-            lastNZ = -1
-            for i, dur in enumerate(durs):
-                if dur <= 0 or dur >= minimalDur:
-                    continue
-                if lastNZ < 0:
-                    lastNZ = i
-                elif dur < minimalDur:
-                    durs[lastNZ] += dur
-                    durs[i] = 0
-                    if durs[lastNZ] >= minimalDur:
-                        # move the surplus to the current frame
-                        surplus = durs[lastNZ] - minimalDur
-                        durs[lastNZ] = minimalDur
-                        durs[i] = surplus
-                        lastNZ = i if surplus > 0.0 else -1
-            # introduce a "small" desync: (0, minimalDur/2> in order to stay true to the max fps
-            if lastNZ > 0:
-                assert durs[lastNZ] < minimalDur
-                durs[lastNZ] = round(durs[lastNZ] / minimalDur) * minimalDur
-
-            # generate final pts
-            self.dstFrPTS = np.cumsum(durs)
-            self.dstFrPTS[durs <= 0] = DROP_FRAME_PTS
-
-            return self.dstFrPTS[-1] > 0
-
-    class AudCtx:
-        def __init__(self, srcStream, dstStream) -> None:
-            self.srcStream = srcStream
-            self.dstStream = dstStream
-            self.srcDuration = None
-            self.timePoints = []
-            self.audioFrames = []
-
-        def captureEditData(self):
-            assert self.srcDuration is None
-            self.srcDuration = self.srcStream.duration
-            if self.srcDuration is None:
-                endPTS = 0
-                seekBeginning(self.srcStream.container)
-                for packet in self.srcStream.container.demux(self.srcStream):
-                    if packet.dts is None:
-                        continue
-                    endPTS = max(endPTS, packet.pts + packet.duration)
-                self.srcDuration = endPTS
-            self.srcDuration *= self.srcStream.time_base
-
-        def applyEditRanges(self, ranges: List[List[Real]]):
-            if len(ranges) == 0:
-                return True
-            streamStart = self.srcStream.start_time * self.srcStream.time_base
-            timePoints = [[Real(streamStart*self.dstStream.sample_rate)],
-                          [Real(streamStart*self.dstStream.sample_rate)]]
-            for b, e, m in ranges:
-                if e < streamStart:
-                    continue
-                b = max(b, streamStart) * self.dstStream.sample_rate
-                e = min(e, self.srcDuration) * self.dstStream.sample_rate
-                betweenPrev = b - timePoints[0][-1]
-                dur = e - b
-                if betweenPrev > 0:
-                    timePoints[0].append(Real(b))
-                    timePoints[1].append(Real(timePoints[1][-1] + betweenPrev))
-                timePoints[0].append(Real(e))
-                timePoints[1].append(Real(timePoints[1][-1] + dur*m))
-            rest = self.srcDuration * self.dstStream.sample_rate - e
-            if rest > 0:
-                timePoints[0].append(Real(e+rest))
-                timePoints[1].append(Real(timePoints[1][-1] + rest))
-            self.timePoints = timePoints
-            return timePoints[1][-1] - timePoints[1][0] > 0
-
-    def __init__(self, logger: logging.Logger):
-        self.logger = logger
-        self.specs = {}
-
-    def edit(self, srcPath, ranges, dstPath):
-        self.logger.info(f'Editing: "{srcPath}"')
-        source = av.open(srcPath)
-        dest, ctxMap = self.prepareDestination(source, dstPath)
-
-        validStreams = {}
-        for idx, ctx in ctxMap.items():
-            ctx.captureEditData()
-            if ctx.applyEditRanges(ranges):
-                validStreams[idx] = ctx.srcStream
-
-        if len(validStreams) > 0:
-            seekBeginning(source)
-            for srcPacket in source.demux(list(validStreams.values())):
-                if srcPacket.stream_index not in ctxMap or srcPacket.dts is None:
-                    if len(ctxMap) == 0:
-                        break
-                    continue
-                ctx = ctxMap[srcPacket.stream_index]
-                assert srcPacket.stream is ctx.srcStream
-                for frame in srcPacket.decode():
-                    if srcPacket.stream.type == VIDEO_STREAM_TYPE:
-                        if frame.index == len(ctx.dstFrPTS) - 1:
-                            del ctxMap[srcPacket.stream_index]
-                        if ctx.dstFrPTS[frame.index] == DROP_FRAME_PTS:
-                            continue
-                        frame.pts = Int(ctx.dstFrPTS[frame.index] / Real(frame.time_base))
-                        frame.pict_type = av.video.frame.PictureType.NONE
-                        dest.mux(ctx.dstStream.encode(frame))
-                    elif srcPacket.stream.type == AUDIO_STREAM_TYPE:
-                        ...
-
-            for dstStream in dest.streams:
-                dest.mux(dstStream.encode())
-        else:
-            self.logger.warning(f'Editing {srcPath} resulted in an empty recording')
-        self.logger.info(f'Finished editing: {srcPath}')
-
-        dest.close()
-        source.close()
-
-    def prepareDestination(self, source, dstPath):
-        dst = av.open(dstPath, mode='w')
-        ctxMap = {}
-
-        validStreams = []
-        for stream in source.streams:
-            if stream.type in SUPPORTED_STREAM_TYPES:
-                if stream.codec_context is not None:
-                    validStreams.append(stream)
-                else:
-                    self.logger.warning(f'Skipping #{stream.index} stream (no decoder available)')
-            else:
-                self.logger.warning(
-                    f'Skipping #{stream.index} stream ({stream.type} not supported)')
-
-        for srcStream in validStreams:
-            # stream-specific settings take precedence over type-specific settings
-            specs = self.specs.get(srcStream.type, {})
-            specs.update(self.specs.get(srcStream.index, {}))
-
-            if srcStream.type == VIDEO_STREAM_TYPE:
-                codec = specs.get('codec', srcStream.codec_context.name)
-                codecOptions = specs.get('codec_options', srcStream.codec_context.options)
-                bitrate = specs.get('bitrate', srcStream.bit_rate)
-                resolution = specs.get('resolution', [srcStream.width, srcStream.height])
-                maxFPS = Fraction(specs.get('maxfps', srcStream.guessed_rate))
-
-                dstStream = dst.add_stream(codec_name=codec, options=codecOptions)
-                dstStream.codec_context.time_base = Fraction(1, 60000)
-                dstStream.time_base = Fraction(1, 60000)  # might not work
-                dstStream.pix_fmt = srcStream.pix_fmt
-                dstStream.bit_rate = bitrate
-                dstStream.width, dstStream.height = resolution
-                ctxMap[srcStream.index] = Editor.VidCtx(srcStream, dstStream, maxFPS)
-
-            elif srcStream.type == AUDIO_STREAM_TYPE:
-                codec = specs.get('codec', srcStream.codec_context.name)
-                codecOptions = specs.get('codec_options', srcStream.codec_context.options)
-                bitrate = specs.get('bitrate', srcStream.bit_rate)
-                samplerate = specs.get('samplerate', srcStream.sample_rate)
-                channels = 1 if specs.get('mono', False) else srcStream.channels
-
-                dstStream = dst.add_stream(codec_name=codec, rate=samplerate)
-                dstStream.options = codecOptions
-                dstStream.bit_rate = bitrate
-                dstStream.channels = channels
-                ctxMap[srcStream.index] = Editor.AudCtx(srcStream, dstStream)
-
-            srcStream.thread_type = 'AUTO'
-            dstStream.thread_type = 'AUTO'
-
-        dst.start_encoding()
-        for vidCtx in [c for c in ctxMap.values() if isinstance(c, Editor.VidCtx)]:
-            possibleFPS = 1 / vidCtx.dstStream.time_base
-            if possibleFPS < vidCtx.maxFPS:
-                self.logger.warning(f'Low time base resolution of #{dstStream.index} video stream - '
-                                    f'maxfps must be limited from {vidCtx.maxFPS} to {possibleFPS}')
-                vidCtx.maxFPS = possibleFPS
-
-        return dst, ctxMap
-
-    def toJSON(self, ranges, path) -> None:
-        with open(path, 'w') as fp:
-            specsDict = {'specs': self.specs,
-                         'ranges': ranges}
-            json.dump(specsDict, fp)
-
     @staticmethod
-    def fromJSON(jsonSpecs: dict, logger: logging.Logger) -> 'Editor':
+    def fromJSON(jsonSpecs: dict, logger: Logger) -> 'Editor':
         """Constructs an Editor from a dictionary with edit specifications.
         Ensures correct types of specs' values
 
         Returns:
-            [Editor]: Editor instance prepared to edit
+            Editor: Editor instance prepared to edit
         """
         editor = Editor(logger)
         for identifier, specs in jsonSpecs.get('specs', {}).items():
@@ -323,33 +540,165 @@ class Editor:
                 elif key == 'mono':
                     especs[key] = bool(value.lower() in ['yes', 'true', '1'])
                 else:
-                    logger.warning(f'Skipping unrecognized specification: {key}:')
+                    logger.warning(f'Skipping unrecognized option: {key}:')
         return editor
 
     @staticmethod
-    def parseJSONRanges(jsonRanges: List[List[str]]):
-        ranges = [[Real(b), Real(e), Real(m)] for (b, e, m) in jsonRanges]
+    def parseJSONRanges(jsonRanges: List[List[str]]) -> List[Range]:
+        ranges = [Range(*r) for r in jsonRanges]
         if len(jsonRanges) > 0:
-            for (b, e, _), (b_1, _, _) in zip(ranges[:-1], ranges[1:]):
-                if not (b < e <= b_1):
+            for r1, r2 in zip(ranges[:-1], ranges[1:]):
+                if not (0 <= r1.beg < r1.end <= r2.beg):
                     raise ValueError('Ranges must be sorted, mutually exclusive, and of length > 0')
-            if not (ranges[-1][0] < ranges[-1][1]):
+            if not (0 <= ranges[-1].beg < ranges[-1].end):
                 raise ValueError('Ranges must be of length > 0')
         return ranges
 
-    @staticmethod
-    def setupArgParser(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
-        """Creates CLI argument parser for editor submodule
+    def __init__(self, logger):
+        self.logger = logger
+        self.specs = {}
 
-        Returns:
-            argparse.ArgumentParser: Argument parser of this submodule
-        """
-        parser.description = Editor.DESCRIPTION
-        parser.add_argument('src',
-                            help=f'Path to the recordding for editing',
-                            type=Path, action='store')
-        parser.add_argument('dst',
-                            help=f'Destination directory for edited recording',
-                            type=Path, action='store')
-        # TODO
-        return parser
+    def edit(self, srcPath: Path, ranges: List[Range], dstPath: Path):
+        self.logger.info(f'Started editing: "{srcPath}"')
+        srcPath = str(Path(srcPath).resolve())
+        dstPath = str(Path(dstPath).resolve())
+        source = av.open(str(srcPath))
+        dest, ctxMap = self.prepareDestination(source, dstPath)
+
+        # find dts of first packets (to know which one to seek for begining)
+        firstPkts = {}
+        for stream in source.streams:
+            seekBeginning(stream)
+            firstPkt = next(source.demux(stream))
+            firstPkts[stream.index] = Real(firstPkt.dts * firstPkt.time_base)
+        streamsOrdered = [k for k, v in sorted(firstPkts.items(), key=lambda kv: kv[1])]
+
+        # prepare contexts of streams for editing
+        validStreams = {}
+        for idx, ctx in ctxMap.items():
+            if ctx.prepareTimelineEdits(ranges):
+                validStreams[idx] = ctx.srcStream
+
+        # edit
+        if len(validStreams) > 0:
+            firstStream = [idx for idx in streamsOrdered if idx in validStreams][0]
+            seekBeginning(source.streams[firstStream])
+            for srcPacket in source.demux(list(validStreams.values())):
+                ctx = ctxMap[srcPacket.stream.index]
+                assert srcPacket.stream is ctx.srcStream
+                if ctx.isDone:
+                    continue
+                for dstPacket in ctx.decodeEditEncode(srcPacket):
+                    dest.mux(dstPacket)
+                if all(ctxMap.values()):  # early stop when all are done
+                    break
+            for dstStream in dest.streams:
+                dest.mux(dstStream.encode())
+        else:
+            self.logger.warning(f'Editing: "{srcPath}" resulted in an empty recording')
+        self.logger.info(f'Finished editing: "{srcPath}" -> "{dstPath}"')
+
+        dest.close()
+        source.close()
+
+    def prepareDestination(self, source, dstPath):
+        dst = av.open(dstPath, mode='w')
+        ctxMap = {}
+
+        validStreams = []
+        for stream in source.streams:
+            if stream.type in SUPPORTED_STREAM_TYPES:
+                if stream.codec_context is not None:
+                    validStreams.append(stream)
+                else:
+                    self.logger.warning(f'Skipping #{stream.index} stream (no decoder available)')
+            else:
+                self.logger.warning(
+                    f'Skipping #{stream.index} stream ({stream.type} not supported)')
+
+        for srcStream in validStreams:
+            # stream-specific settings take precedence over type-specific settings
+            specs = self.specs.get(srcStream.type, {})
+            specs.update(self.specs.get(srcStream.index, {}))
+
+            if srcStream.type == VIDEO_STREAM_TYPE:
+                codec = specs.get('codec', srcStream.codec_context.name)
+                codecOptions = specs.get('codec_options', srcStream.codec_context.options)
+                bitrate = specs.get('bitrate', srcStream.bit_rate)
+                resolution = specs.get('resolution', [srcStream.width, srcStream.height])
+                maxFPS = Fraction(specs.get('maxfps', srcStream.guessed_rate))
+
+                dstStream = dst.add_stream(codec_name=codec, options=codecOptions)
+                dstStream.codec_context.time_base = Fraction(1, 60000)
+                dstStream.time_base = Fraction(1, 60000)  # might not work
+                dstStream.pix_fmt = srcStream.pix_fmt
+                dstStream.bit_rate = bitrate
+                dstStream.width, dstStream.height = resolution
+                ctxMap[srcStream.index] = VidCtx(srcStream, dstStream, maxFPS)
+
+            elif srcStream.type == AUDIO_STREAM_TYPE:
+                codec = specs.get('codec', srcStream.codec_context.name)
+                codecOptions = specs.get('codec_options', srcStream.codec_context.options)
+                bitrate = specs.get('bitrate', srcStream.bit_rate)
+                samplerate = specs.get('samplerate', srcStream.sample_rate)
+                channels = 1 if specs.get('mono', False) else srcStream.channels
+
+                dstStream = dst.add_stream(codec_name=codec, rate=samplerate)
+                dstStream.options = codecOptions
+                dstStream.bit_rate = bitrate
+                dstStream.channels = channels
+                ctxMap[srcStream.index] = AudCtx(srcStream, dstStream)
+
+            srcStream.thread_type = 'AUTO'
+            dstStream.thread_type = 'AUTO'
+
+        dst.start_encoding()
+        for vidCtx in [c for c in ctxMap.values() if isinstance(c, VidCtx)]:
+            possibleFPS = 1 / vidCtx.dstStream.time_base
+            if possibleFPS < vidCtx.maxFPS:
+                self.logger.warning(f'Low time base resolution of #{dstStream.index} video stream - '
+                                    f'maxfps must be limited from {vidCtx.maxFPS} to {possibleFPS}')
+                vidCtx.maxFPS = possibleFPS
+
+        return dst, ctxMap
+
+    def exportJSON(self, ranges: List[Range], path):
+        with open(path, 'w') as fp:
+            specsDict = {'specs': self.specs,
+                         'ranges': [[r.beg, r.end, r.multi] for r in ranges]}
+            json.dump(specsDict, fp)
+
+
+DESCRIPTION = 'Edits recordings according to the specification'
+ARG_SRC = 'src'
+ARG_DST = 'dst'
+DEFAULT_ARGS = {}
+
+
+def setupArgParser(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
+    """Creates CLI argument parser for editor submodule
+
+    Returns:
+        argparse.ArgumentParser: Argument parser of this submodule
+    """
+    parser.description = DESCRIPTION
+    parser.add_argument(ARG_SRC,
+                        help='Path of the recording to edit',
+                        type=Path, action='store')
+    parser.add_argument(ARG_DST,
+                        help='Path of the edited recording',
+                        type=Path, action='store')
+    parser.set_defaults(run=runSubmodule)
+    # TODO
+    return parser
+
+
+def runSubmodule(args: object, logger: Logger) -> None:
+    # TODO
+    args = args.__dict__
+    with open('test.json', 'r') as fp:
+        jsonSpecs = json.load(fp)
+    editor = Editor.fromJSON(jsonSpecs, logger=logger)
+    ranges = Editor.parseJSONRanges(jsonSpecs['ranges'])
+    # editor.exportJSON(ranges, 'test2.json')
+    editor.edit(args[ARG_SRC], ranges, args[ARG_DST])
