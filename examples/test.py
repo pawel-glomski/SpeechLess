@@ -4,7 +4,7 @@ import ffmpeg
 import librosa
 import numpy as np
 from speechless import Editor, Range
-from speechless.utils import rangesOfEquality
+from speechless.utils import rangesOfTruth
 
 THRESHOLD = 1.5
 
@@ -56,7 +56,7 @@ def optimizeSignal(sig):
 
     ##################### Reduce aggresive cuts #####################
 
-    ranges = rangesOfEquality(labels == False)
+    ranges = rangesOfTruth(labels == False)
     ranges = ranges[(ranges[:, 1] - ranges[:, 0]) >= minFalseSeq]
     labels[:] = True
     for r in ranges:
@@ -64,13 +64,13 @@ def optimizeSignal(sig):
 
     ##################### Cut out small segments #####################
 
-    ranges = rangesOfEquality(labels)
+    ranges = rangesOfTruth(labels)
     ranges = ranges[(ranges[:, 1] - ranges[:, 0]) >= minTrueSeq]
     labels[:] = False
     for r in ranges:
         labels[r[0]:r[1]] = True
 
-    ranges = rangesOfEquality(labels == False)
+    ranges = rangesOfTruth(labels == False)
     return (sig[labels == True].reshape(-1), ranges * SEG_LEN / SAMPLE_RATE)
 
 
@@ -82,11 +82,12 @@ if __name__ == '__main__':
 
     sig = loadSignal('video.mp4')
     audio, ranges = optimizeSignal(sig)
-    expectedDuration = len(audio)/SAMPLE_RATE/60
+    ratio = 0.0
+    expectedDuration = (len(sig)/SAMPLE_RATE - (1-ratio)*np.sum(ranges[:, 1] - ranges[:, 0]))/60
     print('Expected duration: '
           f'{int(expectedDuration)}:{(expectedDuration - int(expectedDuration))*60}')
 
-    ranges = Range.fromNumpy(ranges)
+    ranges = Range.fromNumpy(np.concatenate([ranges, np.ones((ranges.shape[0], 1))*ratio], 1))
 
     # with open('examples/test.json', 'r') as fp:
     #     jsonSpecs = json.load(fp)

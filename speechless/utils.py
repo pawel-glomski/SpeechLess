@@ -9,25 +9,23 @@ NULL_LOGGER.handlers = [logging.NullHandler()]
 NULL_LOGGER.propagate = False
 
 
-def rangesOfEquality(arr: np.ndarray) -> List[Tuple[int, int]]:
-    """Returns a list of ranges, for which elements of a specified array are equal. For example:
-    an array [1,1,2,2,3,3] will generate the output: [(0, 2),(2,4),(4,6)].
+def rangesOfTruth(arr: np.ndarray) -> np.ndarray:
+    """Returns a list of ranges, for which elements of a specified array are True. For example:
+    an array [True,True,False,False,True,True] will generate the output: [[0, 2],[4,6]].
 
     Args:
         arr (np.ndarray): 1-dimensional array to check
 
     Returns:
-        List[Tuple[int, int]]: A list of ranges: <start, end)
+        np.ndarray: An array of ranges: <start, end)
     """
     assert len(arr.shape) == 1
 
     ranges = np.where(arr[:-1] != arr[1:])[0] + 1
     isEven = len(ranges) % 2 == 0
-    if (isEven and arr[0]) or (not isEven and arr[0]):
-        ranges = np.concatenate([[0], ranges])
-    if (isEven and arr[0]) or (not isEven and not arr[0]):
-        ranges = np.concatenate([ranges, [len(arr)]])
-    return ranges.reshape((-1, 2))
+    beg = np.array([0] if arr[0] else [], dtype=int)
+    end =  np.array([len(arr)] if isEven == arr[0] else [], dtype=int)
+    return np.concatenate([beg, ranges, end]).reshape((-1, 2))
 
 
 def intLinspaceStepsByLimit(start: int, stop: int, partLimit: int) -> np.ndarray:

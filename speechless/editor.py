@@ -4,13 +4,12 @@ import argparse
 import numpy as np
 import pytsmod as tsm
 
-from collections import OrderedDict
 from typing import List, Tuple
 from fractions import Fraction
 from logging import Logger
 from pathlib import Path
 
-from .utils import Real, rangesOfEquality, intLinspaceStepsByLimit
+from .utils import Real, rangesOfTruth, intLinspaceStepsByLimit
 
 VIDEO_STREAM_TYPE = 'video'
 AUDIO_STREAM_TYPE = 'audio'
@@ -21,7 +20,7 @@ DROP_FRAME_PTS = -1
 AUD_WIN_TYPE = 'hann'
 AUD_WIN_SIZE = 1024
 AUD_HOP_SIZE = int(AUD_WIN_SIZE/4)
-AUD_WS_PAD_SIZE = 1*AUD_WIN_SIZE
+AUD_WS_PAD_SIZE = 512
 AUD_WS_SIZE_MAX = AUD_WS_PAD_SIZE + 1000*AUD_WIN_SIZE + AUD_WS_PAD_SIZE
 AUD_VFRAME_SIZE_MAX = 10*1024
 
@@ -33,7 +32,7 @@ def seekBeginning(stream):
 class Range:
     @staticmethod
     def fromNumpy(arr: np.ndarray) -> List[np.ndarray]:
-        return [Range(*r, 0.0) for r in arr]
+        return [Range(*r) for r in arr]
 
     def __init__(self, beg, end, multi) -> None:
         self.beg = beg
@@ -136,7 +135,6 @@ class VidCtx(EditCtx):
         self.dstPTS = None
 
     def prepareTimelineEdits(self, ranges: List[Range]) -> bool:
-        # return False
         durs, virtualFirst = self._prepareSrcDurs()
         if len(durs) == 0:
             return False
@@ -243,15 +241,15 @@ class AudCtx(EditCtx):
         @staticmethod
         def modifyWsRange(durs: np.ndarray, wsRange: Tuple[int, int],
                           changes: Tuple[int, int]) -> Tuple[int, int]:
-            """Expands or contracts the range of a workspace by a specified number of samples for 
+            """Expands or contracts the range of a workspace by a specified number of samples for
             each side. This operates on frames, so the number of added/removed samples will be equal
-            to or greater (but never less) than specified (which would be 2*`samples`).
+            to or greater (less only on ends) than specified (which would be 2*`samples`).
 
             Args:
                 durs: (np.ndarray): Array with durations of frames
                 wsRange (int): Range of a workspace
-                changes (Tuple[int, int]): Number of samples to add to or remove from each side of 
-                the range: (leftSide, rightSide) 
+                changes (Tuple[int, int]): Number of samples to add to or remove from each side of
+                the range: (leftSide, rightSide)
 
             Returns:
                 Tuple[int, int]: Modified range
@@ -277,13 +275,9 @@ class AudCtx(EditCtx):
                     samples += durs[frIdx]
                     if samples >= abs(targetSamples):
                         break
-
-                if targetSamples > 0:
-                    modified[sideIdx] = frIdx + (direction > 0)
-                else:
-                    modified[sideIdx] = frIdx + direction
+                modified[sideIdx] = frIdx + (direction > 0)
             modified = (min(modified), max(modified))
-            assert modified[0] < modified[1]
+            assert modified[0] <= modified[1]
             return modified
 
         def __init__(self, srcDurs: np.ndarray, dstDurs: np.ndarray, wsRange: Tuple[int, int],
@@ -303,90 +297,116 @@ class AudCtx(EditCtx):
             rightChange = (-1 if encodeRightPad else 1) * AUD_WS_PAD_SIZE
             encWsRange = AudCtx.Workspace.modifyWsRange(srcDurs, wsRange,
                                                         (leftChange, rightChange))
-            leftPadding = min(wsRange[0], encWsRange[0]), max(wsRange[0], encWsRange[0])
-            rightPadding = min(wsRange[1], encWsRange[1]), max(wsRange[1], encWsRange[1])
-            begIdx, endIdx = leftPadding[0], rightPadding[1]
+            leftPad = min(wsRange[0], encWsRange[0]), max(wsRange[0], encWsRange[0])
+            rightPad = min(wsRange[1], encWsRange[1]), max(wsRange[1], encWsRange[1])
 
-            # there are 4 main sample points: [0, 0 + leftPadding, end - rightPadding, end]
-            samplePoints = [[], []]
-
-            # sample points (before edit):
-            srcBegSP = 0
-            srcEndSP = np.sum(srcDurs[begIdx: endIdx])
-            srcLeftPad = np.sum(srcDurs[leftPadding[0]:leftPadding[1]])
-            srcRightPad = np.sum(srcDurs[rightPadding[0]:rightPadding[1]])
-
-            # sample points (after edit):
-            dstBegSP = 0
-            dstEndSP = np.sum(dstDurs[begIdx: endIdx])
-            dstLeftPad = np.sum(dstDurs[leftPadding[0]:leftPadding[1]])
-            dstRightPad = np.sum(dstDurs[rightPadding[0]:rightPadding[1]])
-
-            samples = 0
-            srcInbetweenSP = [0 + srcLeftPad, 0 + srcLeftPad]
-            dstInbetweenSP = [0 + dstLeftPad, 0 + dstLeftPad]
-            for frIdx in range(leftPadding[1], rightPadding[0]):
-                samples += dstDurs[frIdx]
-                srcInbetweenSP[-1] += srcDurs[frIdx]
-                dstInbetweenSP[-1] += dstDurs[frIdx]
-                if ((dstEndSP - dstRightPad) - dstInbetweenSP[-1]) < 2*AUD_WIN_SIZE:
-                    break
-                if samples >= 2*AUD_WIN_SIZE:
-                    srcInbetweenSP.append(srcInbetweenSP[-1])
-                    dstInbetweenSP.append(dstInbetweenSP[-1])
-                    samples = 0
-            srcInbetweenSP[-1] = srcEndSP - srcRightPad
-            dstInbetweenSP[-1] = dstEndSP - dstRightPad
-            assert (srcInbetweenSP[-2] <= srcInbetweenSP[-1] and
-                    dstInbetweenSP[-2] <= dstInbetweenSP[-1])
-
-            samplePoints[0] = sorted(set([srcBegSP] + srcInbetweenSP + [srcEndSP - 1]))
-            samplePoints[1] = sorted(set([dstBegSP] + dstInbetweenSP + [dstEndSP - 1]))
-
-            self.beg = begIdx
-            self.end = endIdx
-            self.leftPad = dstLeftPad
-            self.rightPad = dstRightPad
+            self.beg = leftPad[0]
+            self.end = rightPad[1]
+            self.leftPad = (leftPad[0] - self.beg, leftPad[1] - self.beg)
+            self.rightPad = (rightPad[0] - self.beg, rightPad[1] - self.beg)
             self.encodeLeftPad = encodeLeftPad
             self.encodeRightPad = encodeRightPad
-            self.samplePoints = np.array(samplePoints, dtype=int)
-            self.frameCache = OrderedDict()  # frIdx -> frameData
+            self.dstDurs = dstDurs[self.beg:self.end]
+            self.frameCache = []
             self.frameTemplate = None  # first pushed frame
             self.nextWorkspace = None
+
+            assert self.leftPad[0] == 0 and self.rightPad[1] == self.dstDurs.shape[0]
 
         def pushFrame(self, frIdx: int, frame: av.AudioFrame, frameData: np.ndarray) -> bool:
             assert frIdx < self.end
             if frIdx < self.beg:
                 return False
 
-            if frameData is None:
-                frameData = frame.to_ndarray()
             if len(self.frameCache) == 0:
                 self.frameTemplate = frame
-            self.frameCache[frIdx] = frameData
+            if self.dstDurs[frIdx-self.beg] > 0:
+                frameData = frame.to_ndarray() if frameData is None else frameData
+            else:
+                frameData = np.ndarray(shape=(0, 0))
+            self.frameCache.append((frIdx, frameData))
             return True
 
         def pullFrame(self) -> av.AudioFrame:
-            if (self.end - 1) not in self.frameCache:
+            if len(self.frameCache) == 0 or self.frameCache[-1][0] < (self.end - 1):
                 return None
+            assert (len({idx for idx, frame in self.frameCache}) == len(self.frameCache) and
+                    len(self.frameCache) == (self.end - self.beg))
 
-            sig = np.concatenate(list(self.frameCache.values()), axis=1)
-            sig = tsm.wsola(sig, self.samplePoints, AUD_WIN_TYPE, AUD_WIN_SIZE, AUD_HOP_SIZE)
+            dstLPadLen = np.sum(self.dstDurs[:self.leftPad[1]])
+            dstRPadLen = np.sum(self.dstDurs[self.rightPad[0]:])
 
-            if not self.encodeLeftPad:
-                sig = sig[:, self.leftPad:]
-            if not self.encodeRightPad:
-                sig = sig[:, :-self.rightPad]
+            # add virtual frames to separate padding from real frames
+            if dstLPadLen > 0:
+                self.frameCache.append((self.beg+self.leftPad[1]-0.5, np.ndarray((0, 0))))
+            if dstRPadLen > 0:
+                self.frameCache.append((self.beg+self.rightPad[0]-0.25, np.ndarray((0, 0))))
+            self.frameCache = sorted(self.frameCache, key=lambda kv: kv[0])
 
+            srcDurs = np.array([frame.shape[1] for idx, frame in self.frameCache])
+            dstDurs = np.concatenate([self.dstDurs[self.leftPad[0]:self.leftPad[1]],
+                                      [0],  # virtual, the end of the left padding
+                                      self.dstDurs[self.leftPad[1]:self.rightPad[0]],
+                                      [0],  # virtual, the begining of the right padding
+                                      self.dstDurs[self.rightPad[0]:self.rightPad[1]]])
+
+            # # speed of frames next to deleted ones is unchanged (but they are trimmed)
+            # for beg, end in rangesOfTruth(srcDurs == 0):
+            #     left, right = max(beg-1, 0), min(end, len(srcDurs)-1)
+            #     # the right side of the left frame and the left side of the right frame are trimmed
+            #     srcDurs[left] = dstDurs[left]
+            #     srcDurs[right] = dstDurs[right]
+            #     self.frameCache[left][1] = self.frameCache[left][1][:, :srcDurs[left]]
+            #     self.frameCache[right][1] = self.frameCache[right][1][:, -srcDurs[right]:]
+
+            signal = np.concatenate([f for i, f in self.frameCache if f.shape[1] > 0], axis=1)
+            leftPad = signal[:, :dstLPadLen]
+            rightPad = signal[:, (signal.shape[1]-dstRPadLen):]
+
+            # Time-Scale Modification
+            # padding is included here for the calculations but its modifications are discarded
+            srcSP = np.concatenate([[0], np.cumsum(srcDurs[srcDurs > 0])])
+            dstSP = np.concatenate([[0], np.cumsum(dstDurs[dstDurs > 0])])
+            assert srcSP[-1] == signal.shape[1]
+            assert srcSP.shape == dstSP.shape
+            if not np.array_equal(srcSP, dstSP):
+                srcSP[-1] -= 1
+                dstSP[-1] -= 1
+                signal = tsm.phase_vocoder(signal, np.array([srcSP, dstSP]), AUD_WIN_TYPE,
+                                           AUD_WIN_SIZE, AUD_HOP_SIZE, phase_lock=True)
+
+            # discard modifications made to padding
+            signal[:, :dstLPadLen] = leftPad
+            signal[:, (signal.shape[1]-dstRPadLen):] = rightPad
+
+            # soften transitions between frames next to deleted (or virtual) ones
+            fullDstSP = np.cumsum(dstDurs)  # includes deleted frames
+            for beg, end in rangesOfTruth(dstDurs == 0):
+                if not (0 < beg < end < len(dstDurs)):
+                    continue
+                winSize = min(64, fullDstSP[beg])
+                winSize = min(winSize, fullDstSP[-1] - fullDstSP[beg])
+                window = -np.hamming(winSize*2) + 1
+                signal[:, fullDstSP[beg] - winSize:fullDstSP[beg] + winSize] *= window
+
+            if not self.encodeLeftPad and dstLPadLen > 0:
+                signal = signal[:, dstLPadLen:]
+            if not self.encodeRightPad and dstRPadLen > 0:
+                signal = signal[:, :(signal.shape[1]-dstRPadLen)]
+                # if encodeRightPad == False, there must be a next sub-workspace
                 # transfer common frames to the next workspace
                 assert self.nextWorkspace is not None and len(self.nextWorkspace.frameCache) == 0
-                commonFrames = [(frIdx, self.frameCache[frIdx]) for frIdx in
-                                range(self.nextWorkspace.beg, self.end) if frIdx in self.frameCache]
-                self.nextWorkspace.frameCache = OrderedDict(commonFrames)
+                for f in reversed(self.frameCache):
+                    if f[0] != int(f[0]):  # discard virtual
+                        continue
+                    if not (self.nextWorkspace.beg <= f[0] < self.end):
+                        break
+                    self.nextWorkspace.frameCache.append(f)
+                self.nextWorkspace.frameCache.reverse()
                 self.nextWorkspace.frameTemplate = self.frameTemplate
 
-            dtype = next(iter(self.frameCache.values())).dtype
-            return AudCtx._createFrame(self.frameTemplate, sig.astype(dtype))
+            dtype = self.frameCache[0][1].dtype
+            return AudCtx._createFrame(self.frameTemplate, signal.astype(dtype))
 
     @staticmethod
     def _createFrame(template, data):
@@ -402,7 +422,6 @@ class AudCtx(EditCtx):
         self.workspaces = []  # sorted (by pts) workspaces
         self.dstVFrames = []
         self.dstFramesNo = None
-        self.deletedFrames = {}
         self.past = None
         self.frIdx = 0
 
@@ -414,14 +433,20 @@ class AudCtx(EditCtx):
 
         if len(ranges) > 0:
             dstDurs = self._prepareRawDstDurations(srcDurs, ranges)
+            srcDurs = srcDurs[:len(dstDurs)]
 
             # convert from seconds to samples
-            srcDurs = (srcDurs[:len(dstDurs)] * self.srcStream.sample_rate).astype(int)
-            dstDurs = (dstDurs * self.srcStream.sample_rate).astype(int)
-            self.deletedFrames = set(np.argwhere(dstDurs == 0).squeeze().tolist())
+            pts = (np.cumsum(srcDurs) * self.srcStream.sample_rate).astype(int)
+            srcDurs[1:] = (pts[1:] - pts[:-1])
+            srcDurs[0] = pts[0]
+            srcDurs = srcDurs.astype(int)
+            pts = np.round(np.cumsum(dstDurs) * self.srcStream.sample_rate).astype(int)
+            dstDurs[1:] = (pts[1:] - pts[:-1])
+            dstDurs[0] = pts[0]
+            dstDurs = dstDurs.astype(int)
             self.dstFramesNo = len(dstDurs)
 
-            if len(dstDurs) == 0 or len(self.deletedFrames) == len(dstDurs):
+            if len(dstDurs) == 0 or np.sum(dstDurs) == 0:
                 return False
 
             # PyAV expects the audio streams to start at 0, so the virtual first frame (if present)
@@ -440,31 +465,37 @@ class AudCtx(EditCtx):
         toEdit = srcDurs[:len(dstDurs)] != dstDurs
         srcDurs[dstDurs == 0] = 0  # deleted frames will not be included in workspaces
 
-        for wsRange in rangesOfEquality(toEdit):
+        for beg, end in rangesOfTruth(toEdit):
             # extend the ranges by padding (this might merge adjacent ranges into one)
-            ext = AudCtx.Workspace.modifyWsRange(srcDurs, wsRange,
-                                                 (AUD_WS_PAD_SIZE, AUD_WS_PAD_SIZE))
-            assert ext[0] <= wsRange[0] < wsRange[1] <= ext[1]
-            toEdit[ext[0]:wsRange[0]] = True
-            toEdit[wsRange[1]:ext[1]] = True
+            extBeg, extEnd = AudCtx.Workspace.modifyWsRange(srcDurs, (beg, end),
+                                                            (AUD_WS_PAD_SIZE, AUD_WS_PAD_SIZE))
+            assert extBeg <= extBeg < extEnd <= extEnd
+            srcSamples = np.sum(srcDurs[extBeg:extEnd])
+            dstSamples = np.sum(dstDurs[extBeg:extEnd])
+            if abs(srcSamples-dstSamples) <= 2:
+                dstDurs[beg:end] = srcDurs[beg:end]
+                toEdit[beg:end] = False
+            else:
+                toEdit[extBeg:beg] = True
+                toEdit[end:extEnd] = True
 
-        return [ws for wsRange in rangesOfEquality(toEdit) for ws in
+        return [ws for wsRange in rangesOfTruth(toEdit) for ws in
                 AudCtx.Workspace.createWorkspaces(srcDurs, dstDurs, wsRange)]
 
     def decodeEditEncode(self, srcPacket: av.Packet) -> List[av.Packet]:
         for frIdx, frame, frameData in self._decode(srcPacket):
             self.isDone = frIdx + 1 >= self.dstFramesNo
-
-            if frame is None:
-                continue
-            if len(self.workspaces) > 0:
-                if self.workspaces[0].pushFrame(frIdx, frame, frameData):
+            if len(self.workspaces) > 0 and self.workspaces[0].pushFrame(frIdx, frame, frameData):
+                while len(self.workspaces) > 0:
                     frame = self.workspaces[0].pullFrame()
-                    if frame is None:
+                    if frame is not None:
+                        self.workspaces.pop(0)
+                        yield self.dstStream.encode(frame)
+                    else:
                         assert not self.isDone
-                        continue
-                    self.workspaces.pop(0)
-            yield self.dstStream.encode(frame)
+                        break
+            else:
+                yield self.dstStream.encode(frame)
 
     def _decode(self, srcPacket: av.Packet) -> Tuple[int, av.AudioFrame, np.ndarray]:
         frames = srcPacket.decode()
@@ -475,10 +506,6 @@ class AudCtx(EditCtx):
                 frIdx = self.frIdx
                 self.frIdx += 1
 
-                if frIdx in self.deletedFrames:
-                    yield frIdx, None, None
-                    continue
-
                 data = np.zeros((srcData.shape[0], self.dstVFrames[frIdx]), dtype=srcData.dtype)
                 vFrame = AudCtx._createFrame(srcFrame, data)
                 yield frIdx, vFrame, data
@@ -486,10 +513,6 @@ class AudCtx(EditCtx):
         for frame in frames:
             frIdx = self.frIdx
             self.frIdx += 1
-
-            if frIdx in self.deletedFrames:
-                yield frIdx, None, None
-                continue
 
             frame.pts = None
             yield frIdx, frame, None
@@ -538,7 +561,7 @@ class Editor:
                     if especs[key] <= 0:
                         raise ValueError('"samplerate" must be a positive number')
                 elif key == 'mono':
-                    especs[key] = bool(value.lower() in ['yes', 'true', '1'])
+                    especs[key] = bool(value)
                 else:
                     logger.warning(f'Skipping unrecognized option: {key}:')
         return editor
