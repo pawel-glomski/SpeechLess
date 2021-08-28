@@ -209,6 +209,10 @@ class Downloader:
         return False
 
 
+############################################### CLI ################################################
+
+
+NAME = 'downloader'
 DESCRIPTION = 'Downloads specified videos'
 ARG_SRC = 'src'
 ARG_DST = 'dst'

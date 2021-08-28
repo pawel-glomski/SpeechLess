@@ -692,6 +692,9 @@ class Editor:
             json.dump(specsDict, fp)
 
 
+############################################### CLI ################################################
+
+NAME = 'editor'
 DESCRIPTION = 'Edits recordings according to the specification'
 ARG_SRC = 'src'
 ARG_DST = 'dst'

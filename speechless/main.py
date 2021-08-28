@@ -1,26 +1,27 @@
 import logging
 import argparse
 
-from speechless import downloader, editor
+import speechless
 
-SUBMODULES = ['editor', 'classifier', 'recogniser', 'downloader', 'trainer']
+SUBMODULES = [speechless.editor, speechless.downloader]
 
 
 def main():
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     subparsers = parser.add_subparsers(title='submodule')
-    downloader.setupArgParser(subparsers.add_parser('downloader', help=downloader.DESCRIPTION))
-    editor.setupArgParser(subparsers.add_parser('editor', help=editor.DESCRIPTION))
-    # args = parser.parse_args()
+    for submodule in SUBMODULES:
+        submodule.setupArgParser(subparsers.add_parser(submodule.NAME, help=submodule.DESCRIPTION))
     args = parser.parse_args()
 
-    # TODO: set verbosity level
-    logging.basicConfig(level=logging.INFO,
-                        handlers=[logging.StreamHandler()],
-                        format='%(asctime)s [%(levelname)s] - %(message)s',
-                        datefmt='%Y-%m-%d %H:%M:%S')
-
-    args.run(args, logging.getLogger())
+    if len(args.__dict__) > 0 and hasattr(args, 'run'):
+        # TODO: set verbosity level
+        logging.basicConfig(level=logging.INFO,
+                            handlers=[logging.StreamHandler()],
+                            format='%(asctime)s [%(levelname)s] - %(message)s',
+                            datefmt='%Y-%m-%d %H:%M:%S')
+        args.run(args, logging.getLogger())
+    else:
+        parser.print_help()
 
 
 if __name__ == '__main__':
