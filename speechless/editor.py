@@ -323,7 +323,10 @@ class AudCtx(EditCtx):
             if self.dstDurs[frIdx-self.beg] > 0:
                 frameData = frame.to_ndarray() if frameData is None else frameData
             else:
-                frameData = np.ndarray(shape=(0, 0))
+                if len(self.frameCache) > 0:
+                    frameData = np.ndarray((0, 0), dtype=self.frameCache[0][1].dtype)
+                else:
+                    frameData = np.ndarray((0, 0), dtype=frame.to_ndarray().dtype)
             self.frameCache.append((frIdx, frameData))
             return True
 
