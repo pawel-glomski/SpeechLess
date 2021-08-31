@@ -1,5 +1,0 @@
-librosa
-youtube-dl
-matplotlib
-numpy
-SoundFile
