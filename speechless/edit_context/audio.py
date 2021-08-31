@@ -133,12 +133,13 @@ class Workspace:
     if not np.array_equal(src_sp, dst_sp):
       src_sp[-1] -= 1
       dst_sp[-1] -= 1
-      signal = tsm.phase_vocoder(signal,
-                                 np.array([src_sp, dst_sp]),
-                                 WIN_TYPE,
-                                 WIN_SIZE,
-                                 HOP_SIZE,
-                                 phase_lock=True)
+      signal = tsm.wsola(
+          signal,
+          np.array([src_sp, dst_sp]),
+          WIN_TYPE,
+          WIN_SIZE,
+          HOP_SIZE,
+      ).reshape((signal.shape[0], -1))
 
     # discard modifications made to padding
     signal[:, :dst_lpad_len] = left_pad
