@@ -89,7 +89,7 @@ disable=abstract-method,
         long-suffix,
         map-builtin-not-iterating,
         misplaced-comparison-constant,
-        missing-function-docstring,
+        ; missing-function-docstring,
         metaclass-assignment,
         next-method-called,
         next-method-defined,
@@ -150,7 +150,8 @@ disable=abstract-method,
         C0114,
         superfluous-parens,
         broad-except,
-        logging-fstring-interpolation
+        logging-fstring-interpolation,
+        missing-class-docstring
 
 
 [REPORTS]

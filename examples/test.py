@@ -3,8 +3,9 @@ import logging
 import ffmpeg
 import librosa
 import numpy as np
-from speechless import Editor, Range
+from speechless import Editor
 from speechless.utils import ranges_of_truth
+from speechless.editor import ID_TIMELINE_CHANGES, ID_AUDIO_STREAM, ID_CODEC, ID_RESOLUTION, ID_VIDEO_STREAM
 
 THRESHOLD = 1.5
 
@@ -87,15 +88,14 @@ if __name__ == '__main__':
   print('Expected duration: '
         f'{int(expected_duration)}:{(expected_duration - int(expected_duration))*60}')
 
-  ranges = Range.from_numpy(np.concatenate([ranges, np.ones((ranges.shape[0], 1)) * ratio], 1))
+  tl_changes = np.concatenate([ranges, np.ones((ranges.shape[0], 1)) * ratio], 1)
 
   # with open('examples/test.json', 'r') as fp:
-  #     json_specs = json.load(fp)
-  #     editor = Editor.from_json(json_specs, logger=logger)
-  #     ranges = Editor.parse_json_ranges(json_specs['ranges'])
-  editor = Editor(logger)
-  editor.specs.setdefault('audio', {})['codec'] = 'aac'
-  editor.specs.setdefault('video', {})['resolution'] = [256, 144]
-
-  editor.export_json(ranges, 'out.json')
-  editor.edit('video.mp4', ranges, 'out.mp4')
+  #   json_cfg = json.load(fp)
+  #   editor = Editor.from_json(json_cfg, logger=logger)
+  #   tl_changes = np.array(json_cfg[ID_TIMELINE_CHANGES])
+  video_settings = {ID_RESOLUTION: [256, 144]}
+  audio_settings = {ID_CODEC: 'aac'}
+  editor = Editor(video_settings, audio_settings, logger)
+  editor.export_json('out.json', tl_changes)
+  editor.edit('video.mp4', tl_changes, 'out.mp4')

@@ -26,6 +26,17 @@ class Downloader:
                buffer_size: float,
                with_video: bool,
                logger: Logger = NULL_LOGGER):
+    """Downloader of recordings with lyrics of a specified language
+
+    Args:
+        dst (str): Path to a directory for downloaded recordings
+        lang (str): Language of lyrics (language code, for example 'en')
+        jobs (int): Number of threads to use for downloading
+        min_speed (float): Minimum download speed to reset the connection [MiB]
+        buffer_size (float): Downloading buffer size [MiB]
+        with_video (bool): Download also video stream
+        logger (Logger, optional): Logger for messages. Defaults to NULL_LOGGER.
+    """
     self.dst = Path(dst).resolve()
     self.lang = lang
     self.jobs = jobs
@@ -37,9 +48,9 @@ class Downloader:
   def download(self, src: str) -> None:
     """Download the specified dataset
 
-        Args:
-            src (str): Path to the file containing links of videos to download
-        """
+    Args:
+        src (str): Path to the file containing links of videos to download
+    """
     src = Path(src).resolve()
 
     if not src.is_file():
@@ -67,14 +78,14 @@ class Downloader:
   def _get_urls(self, src_path: Path, lang: str, jobs: int) -> List[str]:
     """Get a list of urls from the provided file, which have subtitles in the specified language
 
-        Args:
-            src_path (Path): Path to a file with links of videos to download
-            lang (str): Language of subtitles
-            jobs (int): Number of simultaneous queries for videos
+    Args:
+        src_path (Path): Path to a file with links of videos to download
+        lang (str): Language of subtitles
+        jobs (int): Number of simultaneous queries for videos
 
-        Returns:
-            List[str]: List of unique urls to download
-        """
+    Returns:
+        List[str]: List of unique urls to download
+    """
     with open(src_path, 'r', encoding='UTF-8') as src_file:
       valid_urls = []
       with Pool(jobs) as pool:
@@ -85,15 +96,15 @@ class Downloader:
 
   def _inspect_url(self, url: str, lang: str) -> List[str]:
     """Inspect the provided URL, expand if it is a playlist, and return the urls which have
-        subtitles in the specified language
+    subtitles in the specified language
 
-        Args:
-            url (str): URL to inspect
-            lang (str): Language of subtitles
+    Args:
+        url (str): URL to inspect
+        lang (str): Language of subtitles
 
-        Returns:
-            List[str]: List of valid urls
-        """
+    Returns:
+        List[str]: List of valid urls
+    """
     try:
       with youtube_dl.YoutubeDL({'logger': NULL_LOGGER}) as ydl:
         info = ydl.extract_info(url, download=False)
@@ -111,13 +122,13 @@ class Downloader:
   def _get_valid_url(self, vid_info: dict, lang: str) -> List[str]:
     """Check whether the provided video match the requirements
 
-        Args:
-            vid_info (dict): Information about the video
-            lang (str): Required language of subtitles
+    Args:
+        vid_info (dict): Information about the video
+        lang (str): Required language of subtitles
 
-        Returns:
-            List[str]: List with the URL of the video or empty if it was discarded
-        """
+    Returns:
+        List[str]: List with the URL of the video or empty if it was discarded
+    """
     url = vid_info['webpage_url']
     subs = {sub['ext'] for sub in vid_info.get('subtitles', {}).setdefault(lang, [])}
     if SUBTITLES_FORMAT in subs:
@@ -130,17 +141,17 @@ class Downloader:
   def _download_stream(self, url: str, stype: str) -> str:
     """Download a stream of the specified type from the provided URL
 
-        Args:
-            url (str): URL of stream to download
-            stype (str): Type of stream to download
+    Args:
+        url (str): URL of stream to download
+        stype (str): Type of stream to download
 
-        Raises:
-            ConnectionError: When download is going too slow, restart the connection
-            ValueError:
+    Raises:
+        ConnectionError: When download is going too slow, restart the connection
+        ValueError:
 
-        Returns:
-            str: The provided URL if successfully downloaded, empty string otherwise
-        """
+    Returns:
+        str: The provided URL if successfully downloaded, empty string otherwise
+    """
     last_good_speed_time = 0
 
     def _progress_callback(progress):
@@ -195,14 +206,14 @@ class Downloader:
   def _download(self, url: str, options: dict, err_prefix: str = '') -> bool:
     """Download a stream/video specified in options with other download settings
 
-        Args:
-            url (str): URL to the video containing the resource specified in options
-            options (dict): Download options for youtube-dl downloader
-            err_prefix (str, optional): . Defaults to ''.
+    Args:
+        url (str): URL to the video containing the resource specified in options
+        options (dict): Download options for youtube-dl downloader
+        err_prefix (str, optional): . Defaults to ''.
 
-        Returns:
-            bool: Whether successfully downloaded specified resource
-        """
+    Returns:
+        bool: Whether successfully downloaded specified resource
+    """
     retries = DOWNLOAD_RETRIES
     while retries > 0:
       with youtube_dl.YoutubeDL(options) as ydl:
@@ -241,11 +252,11 @@ DEFAULT_ARGS = {
 
 
 def setup_arg_parser(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
-  """Creates CLI argument parser for downloader submodule
+  """Sets up a CLI argument parser for this submodule
 
-    Returns:
-        argparse.ArgumentParser: Argument parser of this submodule
-    """
+  Returns:
+      argparse.ArgumentParser: Configured parser
+  """
   parser.description = DESCRIPTION
   parser.add_argument(ARG_SRC,
                       help='Path of the file with links to videos',
@@ -275,7 +286,7 @@ def setup_arg_parser(parser: argparse.ArgumentParser) -> argparse.ArgumentParser
                       default=DEFAULT_ARGS[ARG_MIN_SPEED])
   parser.add_argument('-b',
                       f'--{ARG_BUFFER_SIZE}',
-                      help='Download buffer size [MiB]',
+                      help='Downloading buffer size [MiB]',
                       type=float,
                       action='store',
                       default=DEFAULT_ARGS[ARG_BUFFER_SIZE])
@@ -291,10 +302,10 @@ def setup_arg_parser(parser: argparse.ArgumentParser) -> argparse.ArgumentParser
 def run_submodule(args: object, logger: Logger) -> None:
   """Runs this submodule
 
-    Args:
-        args (object): Arguments of this submodule (defined in Downloader.setup_arg_parser)
-        logger (Logger): Logger
-    """
+  Args:
+      args (object): Arguments of this submodule (defined in setup_arg_parser)
+      logger (Logger): Logger for messages
+  """
   args = args.__dict__
   dl = Downloader(dst=args[ARG_DST],
                   lang=args[ARG_LANG],
