@@ -111,14 +111,15 @@ class Workspace:
     ])
 
     # speed of frames next to deleted ones is unchanged (but they are trimmed)
-    # TODO: this does not work for multiplayers > 1
     for beg, end in ranges_of_truth(src_durs == 0):
       left, right = max(beg - 1, 0), min(end, len(src_durs) - 1)
       # the right side of the left frame and the left side of the right frame are trimmed
-      src_durs[left] = dst_durs[left]
-      src_durs[right] = dst_durs[right]
-      self.frame_cache[left][1] = self.frame_cache[left][1][:, :src_durs[left]]
-      self.frame_cache[right][1] = self.frame_cache[right][1][:, -src_durs[right]:]
+      if dst_durs[left] < src_durs[left]:
+        src_durs[left] = dst_durs[left]
+        self.frame_cache[left][1] = self.frame_cache[left][1][:, :src_durs[left]]
+      if dst_durs[right] < src_durs[right]:
+        src_durs[right] = dst_durs[right]
+        self.frame_cache[right][1] = self.frame_cache[right][1][:, -src_durs[right]:]
 
     signal = np.concatenate([f for i, f in self.frame_cache if f.shape[1] > 0], axis=1)
     left_pad = signal[:, :dst_lpad_len]
