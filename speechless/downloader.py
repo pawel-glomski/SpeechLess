@@ -11,9 +11,9 @@ SUBTITLES_FORMAT = 'vtt'
 QUERY_JOBS_MULTI = 4
 DOWNLOAD_RETRIES = 6
 SLOW_DOWNLOAD_TIMEOUT = 3
-OUT_AUD = 'audio'
-OUT_VID = 'video'
-OUT_SUB = 'subs'
+NO_SUBS_LANGUAGE = 'none'
+OUT_RECORDING = 'recording'
+OUT_SUBTITLES = 'subs'
 
 
 class Downloader:
@@ -38,7 +38,7 @@ class Downloader:
         logger (Logger, optional): Logger for messages. Defaults to NULL_LOGGER.
     """
     self.dst = Path(dst).resolve()
-    self.lang = lang
+    self.lang = lang.lower()
     self.jobs = jobs
     self.min_speed = min_speed * 1024 * 1024
     self.buffer_size = int(buffer_size * 1024 * 1024)
@@ -57,30 +57,27 @@ class Downloader:
       raise FileNotFoundError(f'Bad src file path: {src}')
 
     self.logger.info(f'Checking the links provided in: {src}')
-    urls = self._get_urls(src, self.lang, self.jobs * QUERY_JOBS_MULTI)
+    urls = self._get_urls(src, self.jobs * QUERY_JOBS_MULTI)
     self.logger.info('Finished checking links')
 
     self.logger.info('Downloading:')
     with Pool(self.jobs) as pool:
-      urls = pool.starmap(self._download_stream, [(url, OUT_SUB) for url in urls])
-      urls = set(urls) - {''}
-      urls = pool.starmap(self._download_stream, [(url, OUT_AUD) for url in urls])
-      urls = set(urls) - {''}
-      if self.with_video:
-        urls = pool.starmap(self._download_stream, [(url, OUT_VID) for url in urls])
+      if self.lang != NO_SUBS_LANGUAGE:
+        urls = pool.starmap(self._download_stream, [(url, OUT_SUBTITLES) for url in urls])
         urls = set(urls) - {''}
+      urls = pool.starmap(self._download_stream, [(url, OUT_RECORDING) for url in urls])
+      urls = set(urls) - {''}
     self.logger.info('Finished downloading')
 
     if self.dst.exists():
       with open(self.dst / 'downloaded.txt', 'w', encoding='UTF-8') as file:
         file.writelines([url + '\n' for url in urls])
 
-  def _get_urls(self, src_path: Path, lang: str, jobs: int) -> List[str]:
+  def _get_urls(self, src_path: Path, jobs: int) -> List[str]:
     """Get a list of urls from the provided file, which have subtitles in the specified language
 
     Args:
         src_path (Path): Path to a file with links of videos to download
-        lang (str): Language of subtitles
         jobs (int): Number of simultaneous queries for videos
 
     Returns:
@@ -90,17 +87,16 @@ class Downloader:
       valid_urls = []
       with Pool(jobs) as pool:
         urls = [l.strip() for l in src_file.readlines() if l.strip() != '']
-        urls_list = pool.starmap(self._inspect_url, [(url, lang) for url in urls])
+        urls_list = pool.map(self._inspect_url, [url for url in urls])
         valid_urls += [url for insp_urls in urls_list for url in insp_urls]
       return list(set(valid_urls))
 
-  def _inspect_url(self, url: str, lang: str) -> List[str]:
+  def _inspect_url(self, url: str) -> List[str]:
     """Inspect the provided URL, expand if it is a playlist, and return the urls which have
     subtitles in the specified language
 
     Args:
         url (str): URL to inspect
-        lang (str): Language of subtitles
 
     Returns:
         List[str]: List of valid urls
@@ -111,30 +107,31 @@ class Downloader:
         if 'entries' in info:
           playlist = []
           for vid_info in info['entries']:
-            playlist += self._get_valid_url(vid_info, lang)
+            playlist += self._get_valid_url(vid_info)
           return playlist
         else:
-          return self._get_valid_url(info, lang)
+          return self._get_valid_url(info)
     except Exception as e:
       self.logger.warning(f'[ERROR] {url} - {str(e)}')
     return []
 
-  def _get_valid_url(self, vid_info: dict, lang: str) -> List[str]:
+  def _get_valid_url(self, vid_info: dict) -> List[str]:
     """Check whether the provided video match the requirements
 
     Args:
         vid_info (dict): Information about the video
-        lang (str): Required language of subtitles
 
     Returns:
         List[str]: List with the URL of the video or empty if it was discarded
     """
     url = vid_info['webpage_url']
-    subs = {sub['ext'] for sub in vid_info.get('subtitles', {}).setdefault(lang, [])}
+    if self.lang == NO_SUBS_LANGUAGE:
+      return [url]
+    subs = {sub['ext'] for sub in vid_info.get('subtitles', {}).get(self.lang, [])}
     if SUBTITLES_FORMAT in subs:
       self.logger.info(f'[VALID] {url}')
       return [url]
-    self.logger.warning(f'[ BAD ] {url} - No subtitles for language: "{lang}" '
+    self.logger.warning(f'[ BAD ] {url} - No subtitles for language: "{self.lang}" '
                         f'in format: "{SUBTITLES_FORMAT}"')
     return []
 
@@ -157,7 +154,8 @@ class Downloader:
     def _progress_callback(progress):
       nonlocal last_good_speed_time
       if progress['status'] == 'downloading':
-        speed = progress['speed']
+        speed = progress.get('speed', 0)
+        speed = 0 if speed is None else speed
         if speed > self.min_speed:
           last_good_speed_time = progress['elapsed']
         if (progress['elapsed'] - last_good_speed_time > SLOW_DOWNLOAD_TIMEOUT and
@@ -173,10 +171,11 @@ class Downloader:
         'buffersize': self.buffer_size
     }
 
-    if stype == OUT_SUB:
+    if stype == OUT_SUBTITLES:
+      assert self.lang != NO_SUBS_LANGUAGE
       if self._download(
           url, {
-              **common_options, 'outtmpl': dst_path.format(self.dst, OUT_SUB),
+              **common_options, 'outtmpl': dst_path.format(self.dst, OUT_SUBTITLES),
               'skip_download': 'True',
               'writesubtitles': 'True',
               'subtitleslangs': [self.lang],
@@ -184,18 +183,11 @@ class Downloader:
           }, f'[ SUB ] {url} - '):
         self.logger.info(f'[ SUB ] {url}')
         return url
-    elif stype == OUT_AUD:
+    elif stype == OUT_RECORDING:
+      out_format = 'worst' if self.with_video else 'worstaudio'
       if self._download(url, {
-          **common_options, 'outtmpl': dst_path.format(self.dst, OUT_AUD),
-          'format': 'worstaudio'
-      }, f'[ AUD ] {url} - '):
-        self.logger.info(f'[ AUD ] {url}')
-        return url
-    elif stype == OUT_VID:
-      assert self.with_video, 'Tried to download a video stream, without the --video flag'
-      if self._download(url, {
-          **common_options, 'outtmpl': dst_path.format(self.dst, OUT_VID),
-          'format': 'worstvideo'
+          **common_options, 'outtmpl': dst_path.format(self.dst, OUT_RECORDING),
+          'format': out_format
       }, f'[ VID ] {url} - '):
         self.logger.info(f'[ VID ] {url}')
         return url
@@ -243,7 +235,7 @@ ARG_MIN_SPEED = 'min_speed'
 ARG_BUFFER_SIZE = 'buffer_size'
 ARG_WITH_VIDEO = 'with_video'
 DEFAULT_ARGS = {
-    ARG_LANG: 'en',
+    ARG_LANG: NO_SUBS_LANGUAGE,
     ARG_JOBS: 4,
     ARG_MIN_SPEED: 0.1,
     ARG_BUFFER_SIZE: 0.5,

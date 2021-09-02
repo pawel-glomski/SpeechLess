@@ -10,7 +10,10 @@ def main():
   parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
   subparsers = parser.add_subparsers(title='submodule')
   for submodule in SUBMODULES:
-    submodule.setup_arg_parser(subparsers.add_parser(submodule.NAME, help=submodule.DESCRIPTION))
+    submodule.setup_arg_parser(
+        subparsers.add_parser(submodule.NAME,
+                              help=submodule.DESCRIPTION,
+                              formatter_class=argparse.ArgumentDefaultsHelpFormatter))
   args = parser.parse_args()
 
   if len(args.__dict__) > 0 and hasattr(args, 'run'):
