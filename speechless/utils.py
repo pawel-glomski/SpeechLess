@@ -73,4 +73,4 @@ def int_number_of_parts(number: int, part_limit: int) -> int:
   Returns:
       int: Number of parts
   """
-  return int(np.ceil(number / part_limit))
+  return max(int(np.ceil(number / part_limit)), 1)

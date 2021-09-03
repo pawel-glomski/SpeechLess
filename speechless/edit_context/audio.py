@@ -3,9 +3,10 @@ import numpy as np
 import pytsmod as tsm
 from typing import Generator, List, Tuple
 from av.audio.stream import AudioStream
+from av.audio.frame import format_dtypes
 
 from ..utils import ranges_of_truth, int_linspace_steps_by_limit
-from .common import EditCtx, TimelineChange
+from .common import EditCtx, TimelineChange, Real
 
 WIN_TYPE = 'hann'
 WIN_SIZE = 1024
@@ -69,12 +70,14 @@ class Workspace:
 
     if self.dst_durs[frame_idx - self.beg] > 0:
       frame_data = frame.to_ndarray() if frame_data is None else frame_data
+      if self.frame_template.format.is_packed and len(self.frame_template.layout.channels) > 1:
+        frame_data = frame_data.reshape((-1, 2)).T  # from packed to planar
     else:
       if len(self.frame_cache) > 0:
         frame_data = np.ndarray((0, 0), dtype=self.frame_cache[0][1].dtype)
       else:
         # this will only happen when the first frame is deleted
-        frame_data = np.ndarray((0, 0), dtype=frame.to_ndarray().dtype)
+        frame_data = np.ndarray((0, 0), dtype=np.dtype(format_dtypes[frame.format.name]))
 
     self.frame_cache.append([frame_idx, frame_data])
     return True
@@ -95,20 +98,26 @@ class Workspace:
     dst_rpad_len = np.sum(self.dst_durs[self.right_pad[0]:])
 
     # add virtual frames to separate padding
-    if dst_lpad_len > 0:
-      self.frame_cache.append([self.beg + self.left_pad[1] - 0.5, np.ndarray((0, 0))])
-    if dst_rpad_len > 0:
-      self.frame_cache.append([self.beg + self.right_pad[0] - 0.25, np.ndarray((0, 0))])
-    self.frame_cache = sorted(self.frame_cache, key=lambda kv: kv[0])
 
+    dst_durs_ext = [self.dst_durs[self.left_pad[0]:self.left_pad[1]]]  # left padding
+
+    if dst_lpad_len > 0:
+      # virtual, the end of the left padding
+      self.frame_cache.append([self.beg + self.left_pad[1] - 0.5, np.ndarray((0, 0))])
+      dst_durs_ext.append([0])
+
+    dst_durs_ext.append(self.dst_durs[self.left_pad[1]:self.right_pad[0]])  # actual frames
+
+    if dst_rpad_len > 0:
+      # virtual, the begining of the right padding
+      self.frame_cache.append([self.beg + self.right_pad[0] - 0.25, np.ndarray((0, 0))])
+      dst_durs_ext.append([0])
+
+    dst_durs_ext.append(self.dst_durs[self.right_pad[0]:self.right_pad[1]])  # right padding
+
+    self.frame_cache = sorted(self.frame_cache, key=lambda kv: kv[0])
     src_durs = np.array([frame.shape[1] for idx, frame in self.frame_cache])
-    dst_durs = np.concatenate([
-        self.dst_durs[self.left_pad[0]:self.left_pad[1]],
-        [0],  # virtual, the end of the left padding
-        self.dst_durs[self.left_pad[1]:self.right_pad[0]],
-        [0],  # virtual, the begining of the right padding
-        self.dst_durs[self.right_pad[0]:self.right_pad[1]]
-    ])
+    dst_durs = np.concatenate(dst_durs_ext)
 
     # speed of frames next to deleted ones is unchanged (but they are trimmed)
     for beg, end in ranges_of_truth(src_durs == 0):
@@ -121,7 +130,7 @@ class Workspace:
         src_durs[right] = dst_durs[right]
         self.frame_cache[right][1] = self.frame_cache[right][1][:, -src_durs[right]:]
 
-    signal = np.concatenate([f for i, f in self.frame_cache if f.shape[1] > 0], axis=1)
+    signal = np.concatenate([f for i, f in self.frame_cache if f.shape[1] > 0], axis=1).astype(Real)
     left_pad = signal[:, :dst_lpad_len]
     right_pad = signal[:, (signal.shape[1] - dst_rpad_len):]
 
@@ -165,7 +174,7 @@ class Workspace:
       # transfer common frames to the next workspace
       assert self.next_workspace is not None and len(self.next_workspace.frame_cache) == 0
       for f in reversed(self.frame_cache):
-        if f[0] != int(f[0]):  # discard virtual
+        if f[0] != int(f[0]):  # discard padding separators
           continue
         if not (self.next_workspace.beg <= f[0] < self.end):
           break
@@ -328,15 +337,14 @@ class AudioEditContext(EditCtx):
       if len(dst_durs) == 0 or np.sum(dst_durs) == 0:
         return False
 
-      # PyAV expects the audio streams to start at 0, so the virtual first frame (if present)
+      # PyAV expects audio streams to start at 0, so the virtual first frame (if present)
       # will be actually encoded - if its too big, it must be split into many frames
-      if len(dst_durs) > 0:
-        if first_is_virtual:
-          self.dst_vframes = int_linspace_steps_by_limit(0, dst_durs[0], VFRAME_SIZE_MAX)
-          # srcV_frames = int_linspace_steps_by_no(0, src_durs[0], len(self.dst_vframes))
-          dst_durs = np.concatenate([self.dst_vframes, dst_durs[1:]])
-          src_durs = np.concatenate([self.dst_vframes, src_durs[1:]])
-        self.workspaces = self._create_workspaces(src_durs, dst_durs)
+      if first_is_virtual:
+        self.dst_vframes = int_linspace_steps_by_limit(0, dst_durs[0], VFRAME_SIZE_MAX)
+        assert len(self.dst_vframes) > 0
+        dst_durs = np.concatenate([self.dst_vframes, dst_durs[1:]])
+        src_durs = np.concatenate([self.dst_vframes, src_durs[1:]])
+      self.workspaces = self._create_workspaces(src_durs, dst_durs)
     # there must be at lease one valid frame
     return len(dst_durs) > 0
 
@@ -351,23 +359,23 @@ class AudioEditContext(EditCtx):
     Returns:
         List[Workspace]: List of workspaces
     """
-    to_edit = src_durs[:len(dst_durs)] != dst_durs  # this must be frst to see which frames to drop
-    src_durs[dst_durs == 0] = 0  # deleted frames will not be edited (just dropped)
+    to_edit = src_durs[:len(dst_durs)] != dst_durs
+    # floating-point precision error can introduce a duration diffrence of 1 sample
+    for beg, end in ranges_of_truth(to_edit):
+      src_samples = np.sum(src_durs[beg:end])
+      dst_samples = np.sum(dst_durs[beg:end])
+      if abs(src_samples - dst_samples) <= 1:
+        dst_durs[beg:end] = src_durs[beg:end]
+        to_edit[beg:end] = False
 
+    src_durs[dst_durs == 0] = 0  # deleted frames will not be edited (just dropped)
     for beg, end in ranges_of_truth(to_edit):
       # extend the ranges by padding (this might merge adjacent ranges into one)
       ext_beg, ext_end = Workspace.modify_workspace_range(src_durs, (beg, end),
                                                           (WS_PAD_SIZE, WS_PAD_SIZE))
       assert ext_beg <= beg < end <= ext_end
-      src_samples = np.sum(src_durs[ext_beg:ext_end])
-      dst_samples = np.sum(dst_durs[ext_beg:ext_end])
-      if abs(src_samples - dst_samples) <= 1:
-        # floating-point precision error might introduce a duration diffrence of 1 sample
-        dst_durs[beg:end] = src_durs[beg:end]
-        to_edit[beg:end] = False
-      else:
-        to_edit[ext_beg:beg] = True
-        to_edit[end:ext_end] = True
+      to_edit[ext_beg:beg] = True
+      to_edit[end:ext_end] = True
 
     return [
         ws for ws_range in ranges_of_truth(to_edit)
@@ -390,14 +398,14 @@ class AudioEditContext(EditCtx):
       if len(self.workspaces) > 0 and self.workspaces[0].push_frame(frame_idx, frame, frame_data):
         while len(self.workspaces) > 0:
           frame = self.workspaces[0].pull_frame()
-          if frame is not None:
-            self.workspaces.pop(0)
-            yield self.dst_stream.encode(frame)
-          else:
-            assert not self.is_done
+          if frame is None:
             break
+          self.workspaces.pop(0)
+          yield self.dst_stream.encode(frame)
       else:
         yield self.dst_stream.encode(frame)
+
+    assert not self.is_done or len(self.workspaces) == 0
 
   def _decode(self, src_packet: av.Packet) \
     -> Generator[Tuple[int, av.Packet, np.ndarray], None, None]:
@@ -422,7 +430,8 @@ class AudioEditContext(EditCtx):
         frame_idx = self.frame_idx
         self.frame_idx += 1
 
-        data = np.zeros((src_data.shape[0], self.dst_vframes[frame_idx]), dtype=src_data.dtype)
+        data_shape = (len(src_frame.layout.channels), self.dst_vframes[frame_idx])
+        data = np.zeros(data_shape, dtype=src_data.dtype)
         v_frame = create_audio_frame(src_frame, data)
         yield frame_idx, v_frame, data
 
@@ -444,6 +453,8 @@ def create_audio_frame(template: av.AudioFrame, data: np.ndarray) -> av.AudioFra
   Returns:
       av.AudioFrame: Frame with the specified data and configuration of the template frame
   """
+  if template.format.is_packed and len(template.layout.channels) > 1:
+    data = data.T.reshape((1, -1))  # packed: [c1_1, c2_1, c1_2, c2_2, ..., c1_n, c2_n]
   frame = av.AudioFrame.from_ndarray(data, template.format.name, template.layout.name)
   frame.sample_rate = template.sample_rate
   frame.time_base = template.time_base
