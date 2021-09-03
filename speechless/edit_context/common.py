@@ -86,7 +86,7 @@ class EditCtx:
     """Seeks the start of the source stream so that the first packet of this stream will be demuxed
     next"""
     self.src_stream.container.seek(
-        np.iinfo(np.int32).min,  # a big negative number
+        np.iinfo(int).min // 2,  # a big negative number
         stream=self.src_stream,
         backward=True,
         any_frame=False)
@@ -102,7 +102,7 @@ class EditCtx:
     pts = []
     self.seek_beginning()
     for packet in self.src_stream.container.demux(self.src_stream):
-      if packet.dts is not None:
+      if packet.pts is not None:
         pts.append(packet.pts)
     if len(pts) < 2:  # there must be at least 2 frames
       return np.ndarray([]), False
@@ -159,7 +159,8 @@ class EditCtx:
       new_dur += old_dur
 
       # early stop when the recording has trimmed end
-      if new_dur == 0 and r_idx < len(changes) and changes[r_idx].end >= src_stream_end:
+      if (new_dur == 0 and r_idx < len(changes) and fr_end > changes[r_idx].beg and
+          changes[r_idx].end >= src_stream_end):
         break
       dst_durs.append(new_dur)
 

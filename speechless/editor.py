@@ -62,19 +62,23 @@ class Editor:
     source = av.open(str(src_path))
     dest, ctx_map = self.prepare_destination(source, dst_path)
 
-    # find DTS of first packets to know which one to seek for begining
-    first_pkts = {}
-    for idx, ctx in ctx_map.items():
-      ctx.seek_beginning()
-      first_pkt = next(source.demux(ctx.src_stream))
-      first_pkts[idx] = Real(first_pkt.dts * first_pkt.time_base)
-    streams_ordered = [k for k, v in sorted(first_pkts.items(), key=lambda kv: kv[1])]
-
     # prepare contexts of streams for editing
     valid_streams = {}
     for idx, ctx in ctx_map.items():
       if ctx.prepare_for_editing(changes):
         valid_streams[idx] = ctx.src_stream
+    ctx_map = {k: v for k, v in ctx_map.items() if k in valid_streams}
+
+    # find DTS of first packets to know which one to seek for begining
+    first_pkts = {}
+    for idx, ctx in ctx_map.items():
+      ctx.seek_beginning()
+      first_pkt = next(source.demux(ctx.src_stream))
+      while first_pkt.dts is None:
+        first_pkt = next(source.demux(ctx.src_stream))
+      if first_pkt.dts is not None:
+        first_pkts[idx] = Real(first_pkt.dts * first_pkt.time_base)
+    streams_ordered = [k for k, v in sorted(first_pkts.items(), key=lambda kv: kv[1])]
 
     # edit
     if len(valid_streams) > 0:
@@ -89,6 +93,7 @@ class Editor:
           dest.mux(dst_packet)
         if all(ctx.is_done for ctx in ctx_map.values()):  # early stop when all are done
           break
+      assert all(ctx.is_done for ctx in ctx_map.values())
 
       # flush buffers
       for dst_stream in dest.streams:
@@ -137,11 +142,14 @@ class Editor:
         resolution = settings.get(ID_RESOLUTION, [src_stream.width, src_stream.height])
         max_fps = Fraction(settings.get(ID_MAX_FPS, src_stream.guessed_rate))
 
+        if bitrate is None:
+          self.logger.warning(f'Unknown bitrate of #{src_stream.index} stream, using default')
+
         dst_stream = dst.add_stream(codec_name=codec, options=codec_options)
         dst_stream.codec_context.time_base = Fraction(1, 60000)
         dst_stream.time_base = Fraction(1, 60000)  # might not work
         dst_stream.pix_fmt = src_stream.pix_fmt
-        dst_stream.bit_rate = bitrate
+        dst_stream.bit_rate = dst_stream.bit_rate if bitrate is None else bitrate
         dst_stream.width, dst_stream.height = resolution
         ctx_map[src_stream.index] = VideoEditContext(src_stream, dst_stream, max_fps)
 
