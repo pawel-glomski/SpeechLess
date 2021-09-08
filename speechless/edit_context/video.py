@@ -98,6 +98,8 @@ class VideoEditContext(EditCtx):
     assert src_packet.stream is self.src_stream
 
     for frame in src_packet.decode():
+      if self.is_done:
+        break
       frame_idx = self.frame_idx
       self.frame_idx += 1
       self.is_done = (self.frame_idx == len(self.dst_pts))

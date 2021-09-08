@@ -381,6 +381,8 @@ class AudioEditContext(EditCtx):
     assert src_packet.stream is self.src_stream
 
     for frame_idx, frame, frame_data in self._decode(src_packet):
+      if self.is_done:
+        break
       self.is_done = frame_idx + 1 >= self.dst_frames_no
       if len(self.workspaces) > 0 and self.workspaces[0].push_frame(frame_idx, frame, frame_data):
         while len(self.workspaces) > 0:

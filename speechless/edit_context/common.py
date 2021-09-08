@@ -102,7 +102,7 @@ class EditCtx:
     pts = []
     self.seek_beginning()
     for packet in self.src_stream.container.demux(self.src_stream):
-      if packet.pts is not None:
+      if packet.pts is not None and packet.pts >= 0:
         pts.append(packet.pts)
     if len(pts) < 2:  # there must be at least 2 frames
       return np.ndarray([]), False
