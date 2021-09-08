@@ -96,28 +96,8 @@ class Workspace:
 
     dst_lpad_len = np.sum(self.dst_durs[:self.left_pad[1]])
     dst_rpad_len = np.sum(self.dst_durs[self.right_pad[0]:])
-
-    # add virtual frames to separate padding
-
-    dst_durs_ext = [self.dst_durs[self.left_pad[0]:self.left_pad[1]]]  # left padding
-
-    if dst_lpad_len > 0:
-      # virtual, the end of the left padding
-      self.frame_cache.append([self.beg + self.left_pad[1] - 0.5, np.ndarray((0, 0))])
-      dst_durs_ext.append([0])
-
-    dst_durs_ext.append(self.dst_durs[self.left_pad[1]:self.right_pad[0]])  # actual frames
-
-    if dst_rpad_len > 0:
-      # virtual, the begining of the right padding
-      self.frame_cache.append([self.beg + self.right_pad[0] - 0.25, np.ndarray((0, 0))])
-      dst_durs_ext.append([0])
-
-    dst_durs_ext.append(self.dst_durs[self.right_pad[0]:self.right_pad[1]])  # right padding
-
-    self.frame_cache = sorted(self.frame_cache, key=lambda kv: kv[0])
     src_durs = np.array([frame.shape[1] for idx, frame in self.frame_cache])
-    dst_durs = np.concatenate(dst_durs_ext)
+    dst_durs = self.dst_durs
 
     # speed of frames next to deleted ones is unchanged (but they are trimmed)
     for beg, end in ranges_of_truth(src_durs == 0):
@@ -131,6 +111,21 @@ class Workspace:
         self.frame_cache[right][1] = self.frame_cache[right][1][:, -src_durs[right]:]
 
     signal = np.concatenate([f for i, f in self.frame_cache if f.shape[1] > 0], axis=1).astype(Real)
+
+    # soften transitions between frames next to deleted ones
+
+    def soften_transition(signal, point, length):
+      win_size = min(length, point)
+      win_size = max(min(win_size, signal.shape[1] - point), 0)
+      window = -np.hamming(win_size * 2) + 1
+      signal[:, point - win_size:point + win_size] *= window
+
+    full_src_sp = np.cumsum(src_durs)  # includes deleted frames
+    for beg, end in ranges_of_truth(src_durs == 0):
+      if (0 < beg < end < len(src_durs)):
+        soften_transition(signal, full_src_sp[beg], 64)
+
+    # save current padding
     left_pad = signal[:, :dst_lpad_len]
     right_pad = signal[:, (signal.shape[1] - dst_rpad_len):]
 
@@ -151,19 +146,13 @@ class Workspace:
           HOP_SIZE,
       ).reshape((signal.shape[0], -1))
 
-    # discard modifications made to padding
-    signal[:, :dst_lpad_len] = left_pad
-    signal[:, (signal.shape[1] - dst_rpad_len):] = right_pad
+      # discard modifications made to padding
+      signal[:, :dst_lpad_len] = left_pad
+      signal[:, (signal.shape[1] - dst_rpad_len):] = right_pad
 
-    # soften transitions between frames next to deleted (or virtual) ones
-    full_dst_sp = np.cumsum(dst_durs)  # includes deleted frames
-    for beg, end in ranges_of_truth(dst_durs == 0):
-      if not (0 < beg < end < len(dst_durs)):
-        continue
-      win_size = min(64, full_dst_sp[beg])
-      win_size = min(win_size, full_dst_sp[-1] - full_dst_sp[beg])
-      window = -np.hamming(win_size * 2) + 1
-      signal[:, full_dst_sp[beg] - win_size:full_dst_sp[beg] + win_size] *= window
+      # soften the transition between the padding and the modified signal
+      soften_transition(signal, dst_lpad_len, 64)
+      soften_transition(signal, (signal.shape[1] - dst_rpad_len), 64)
 
     # prepare the output frame
     if not self.encode_left_pad and dst_lpad_len > 0:
@@ -174,8 +163,6 @@ class Workspace:
       # transfer common frames to the next workspace
       assert self.next_workspace is not None and len(self.next_workspace.frame_cache) == 0
       for f in reversed(self.frame_cache):
-        if f[0] != int(f[0]):  # discard padding separators
-          continue
         if not (self.next_workspace.beg <= f[0] < self.end):
           break
         self.next_workspace.frame_cache.append(f)
