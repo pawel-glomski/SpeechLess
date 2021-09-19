@@ -2,6 +2,9 @@ from pathlib import Path
 import deepspeech
 import numpy
 
+from typing import List
+from utils import Real, Token
+
 MODEL_PATH = (Path.cwd() / ('../models' if Path.cwd().name == 'src' else 'models') /
               'deepspeech-0.9.3-models.pbmm').resolve()
 SCORER_PATH = (Path.cwd() / ('../models' if Path.cwd().name == 'src' else 'models') /
@@ -66,6 +69,29 @@ def string_count_words(string: str) -> dict:
       value = words.get(word)
       words.update({word: value + 1})
   return words
+
+
+def transcript_to_tokens(transcript: deepspeech.CandidateTranscript) -> List[Token]:
+  token_list = list()
+  transcript = transcript.tokens
+  word = ''
+  timestamps = list()
+  for t in transcript:
+    if t.text == ' ':
+      if len(word) > 0:
+        timestamps.append(Real(t.start_time))
+        token_list.append(Token(word, timestamps))
+      word = ''
+      timestamps.clear()
+      continue
+    word += t.text
+    timestamps.append(Real(t.start_time))
+  if len(word) > 0:
+    #aproximate end of the last word timestamp
+    timestamps.append(
+        Real(transcript[-1].start_time + (transcript[-1].start_time - transcript[-2].start_time)))
+    token_list.append(Token(word, timestamps))
+  return token_list
 
 
 def speech_to_text(audio: numpy.array) -> deepspeech.CandidateTranscript:
