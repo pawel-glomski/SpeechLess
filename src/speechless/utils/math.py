@@ -1,4 +1,5 @@
 import numpy as np
+from typing import List
 
 Real = np.double
 
@@ -68,3 +69,54 @@ def int_number_of_parts(number: int, part_limit: int) -> int:
       int: Number of parts
   """
   return max(int(np.ceil(number / part_limit)), 1)
+
+
+class Token:
+
+  def __init__(self, token: str, timestamps: List[Real]) -> None:
+    self._str = token
+    self.timestamps = timestamps.copy()
+
+  @property
+  def timestamps(self):
+    return self._timestamps
+
+  @timestamps.setter
+  def timestamps(self, value: List[Real]):
+    assert len(value) == len(self._str) + 1
+    self._timestamps = value
+
+  @property
+  def end(self):
+    return self._timestamps[-1]
+
+  @property
+  def start(self):
+    return self._timestamps[0]
+
+  def __str__(self) -> str:
+    return self._str
+
+  def __getitem__(self, key):
+    return self._str[key], self.timestamps[key]
+
+  def __len__(self):
+    return len(self._str)
+
+  def __iter__(self):
+    return TokenIterator(self)
+
+
+class TokenIterator:
+  """Iterator for Token class"""
+
+  def __init__(self, token: Token) -> None:
+    self._token = token
+    self._index = 0
+
+  def __next__(self):
+    if len(self._token) > self._index:
+      result = self._token[self._index]
+      self._index += 1
+      return result
+    raise StopIteration

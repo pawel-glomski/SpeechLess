@@ -36,6 +36,7 @@ class EditToken:
     self.end_time = end_time
     self.start_pos = None  # position in the document (character)
     self.index = None  # index of the token in the document
+    self.label = None
     assert self.start_time < self.end_time
 
   def as_timeline_change(self, duration_ratio: float) -> TimelineChange:
