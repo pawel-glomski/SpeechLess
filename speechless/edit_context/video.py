@@ -22,7 +22,6 @@ class VideoEditContext(EditCtx):
     """
     super().__init__(src_stream, dst_stream)
     self.max_fps = max_fps
-    self.frame_idx = 0
     self.dst_pts = None
 
   def prepare_for_editing(self, changes: List[TimelineChange]) -> bool:
@@ -42,7 +41,7 @@ class VideoEditContext(EditCtx):
     if len(changes) > 0:
       durs = self._prepare_raw_dst_durations(durs, changes)
       durs = self._constrain_raw_dst_durations(durs)
-      if len(durs) == 0 or np.sum(durs) == 0:
+      if len(durs) == 0 or np.max(durs) <= 0:
         return False
 
     self.dst_pts = np.concatenate([[0], np.cumsum(durs[:-1])])
@@ -52,6 +51,7 @@ class VideoEditContext(EditCtx):
     if first_is_virtual:
       self.dst_pts = self.dst_pts[1:]
 
+    self.num_frames_to_encode = len(self.dst_pts)
     return len(self.dst_pts) > 0
 
   def _constrain_raw_dst_durations(self, dst_durs: np.ndarray) -> np.ndarray:
@@ -98,11 +98,10 @@ class VideoEditContext(EditCtx):
     assert src_packet.stream is self.src_stream
 
     for frame in src_packet.decode():
-      if self.is_done:
+      if self.is_done():
         break
-      frame_idx = self.frame_idx
-      self.frame_idx += 1
-      self.is_done = (self.frame_idx == len(self.dst_pts))
+      frame_idx = self.num_frames_encoded
+      self.num_frames_encoded += 1
       if self.dst_pts[frame_idx] != DROP_FRAME_PTS:
         frame.pts = int(round(self.dst_pts[frame_idx] / frame.time_base))
         frame.pict_type = av.video.frame.PictureType.NONE

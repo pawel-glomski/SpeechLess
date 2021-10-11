@@ -1,6 +1,6 @@
 import av
 import numpy as np
-from typing import List, Tuple
+from typing import Dict, List, Tuple
 from speechless.utils import Real
 
 
@@ -80,16 +80,17 @@ class EditCtx:
     """
     self.src_stream = src_stream
     self.dst_stream = dst_stream
-    self.is_done = False
+    self.num_frames_to_encode = None
+    self.num_frames_encoded = 0
 
-  def seek_beginning(self) -> None:
-    """Seeks the start of the source stream so that the first packet of this stream will be demuxed
-    next"""
-    self.src_stream.container.seek(
-        np.iinfo(int).min // 2,  # a big negative number
-        stream=self.src_stream,
-        backward=True,
-        any_frame=False)
+  def is_done(self) -> bool:
+    """Returns whether editing is done for this context
+
+    Returns:
+        bool: True when done, False otherwise
+    """
+    # if num_frames_to_encode is None, then this function was called too early
+    return self.num_frames_encoded >= self.num_frames_to_encode
 
   def _prepare_src_durations(self) -> Tuple[np.ndarray, bool]:
     """Demuxes each packet in the source stream in order to calculate the duration of each frame
@@ -100,12 +101,11 @@ class EditCtx:
         virtual - duration of a non-existent frame added to streams that do not start at 0 second
     """
     pts = []
-    self.seek_beginning()
     for packet in self.src_stream.container.demux(self.src_stream):
       if packet.pts is not None and packet.pts >= 0:
         pts.append(packet.pts)
     if len(pts) < 2:  # there must be at least 2 frames
-      return np.ndarray([]), False
+      return (np.ndarray(shape=(0,)), False)
 
     pts = sorted(set(pts))
     # convert to seconds and set the end frame pts
@@ -116,8 +116,8 @@ class EditCtx:
     # assume duration of the last frame is equal to the average duration of real frames
 
     src_durs = np.concatenate([virtual_first, durs, [np.mean(durs)]])
-    fist_is_virtual = len(virtual_first) == 1
-    return (src_durs, fist_is_virtual)
+    first_is_virtual = len(virtual_first) == 1
+    return (src_durs, first_is_virtual)
 
   def _prepare_raw_dst_durations(self, src_durs: np.ndarray,
                                  changes: List[TimelineChange]) -> np.ndarray:
@@ -165,3 +165,27 @@ class EditCtx:
       dst_durs.append(new_dur)
 
     return np.array(dst_durs, dtype=Real) if len(dst_durs) >= 2 else np.array([])
+
+
+def restart_container(container: av.container.InputContainer, ctx_map: Dict[int, EditCtx]) \
+  -> av.container.InputContainer:
+  """Restarts a container and updates the affected contexts. The next demuxed packed of the returned
+  container will be its first one
+
+  Args:
+      container (av.container.InputContainer): A container to restart
+      ctx_map (Dict[int, EditCtx]): Map of contexts to update (mapping: stream_index -> context)
+
+  Returns:
+      av.container.InputContainer: A restarted container
+  """
+  for ctx in ctx_map.values():
+    assert ctx.src_stream.container is container
+
+  filename = container.name
+  container.close()
+
+  container = av.open(filename)
+  for idx, ctx in ctx_map.items():
+    ctx_map[idx].src_stream = container.streams[idx]
+  return container

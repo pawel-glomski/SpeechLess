@@ -290,10 +290,8 @@ class AudioEditContext(EditCtx):
     super().__init__(src_stream, dst_stream)
     self.workspaces = []  # sorted by pts
     self.dst_vframes = []
-    self.dst_frames_no = None
-    self.frame_idx = 0
 
-  def prepare_for_editing(self, ranges: List[TimelineChange]) -> bool:
+  def prepare_for_editing(self, changes: List[TimelineChange]) -> bool:
     """Prepares this context for editing by creating editing workspaces
 
     Args:
@@ -306,32 +304,31 @@ class AudioEditContext(EditCtx):
     if len(src_durs) == 0:
       return False
 
-    if len(ranges) > 0:
-      dst_durs = self._prepare_raw_dst_durations(src_durs, ranges)
-      src_durs = src_durs[:len(dst_durs)]
+    dst_durs = self._prepare_raw_dst_durations(src_durs, changes)
+    src_durs = src_durs[:len(dst_durs)]
 
-      # convert from seconds to samples
-      pts = (np.cumsum(src_durs) * self.src_stream.sample_rate).astype(int)
-      src_durs[1:] = (pts[1:] - pts[:-1])
-      src_durs[0] = pts[0]
-      src_durs = src_durs.astype(int)
-      pts = np.round(np.cumsum(dst_durs) * self.src_stream.sample_rate).astype(int)
-      dst_durs[1:] = (pts[1:] - pts[:-1])
-      dst_durs[0] = pts[0]
-      dst_durs = dst_durs.astype(int)
-      self.dst_frames_no = len(dst_durs)
+    # convert from seconds to samples
+    pts = (np.cumsum(src_durs) * self.src_stream.sample_rate).astype(int)
+    src_durs[1:] = (pts[1:] - pts[:-1])
+    src_durs[0] = pts[0]
+    src_durs = src_durs.astype(int)
+    pts = np.round(np.cumsum(dst_durs) * self.src_stream.sample_rate).astype(int)
+    dst_durs[1:] = (pts[1:] - pts[:-1])
+    dst_durs[0] = pts[0]
+    dst_durs = dst_durs.astype(int)
 
-      if len(dst_durs) == 0 or np.sum(dst_durs) == 0:
-        return False
+    if len(dst_durs) == 0 or np.max(dst_durs) <= 0:
+      return False
 
-      # PyAV expects audio streams to start at 0, so the virtual first frame (if present)
-      # will be actually encoded - if its too big, it must be split into many frames
-      if first_is_virtual:
-        self.dst_vframes = int_linspace_steps_by_limit(0, dst_durs[0], VFRAME_SIZE_MAX)
-        assert len(self.dst_vframes) > 0
-        dst_durs = np.concatenate([self.dst_vframes, dst_durs[1:]])
-        src_durs = np.concatenate([self.dst_vframes, src_durs[1:]])
-      self.workspaces = self._create_workspaces(src_durs, dst_durs)
+    # PyAV expects audio streams to start at 0, so the virtual first frame (if present)
+    # will be actually encoded - if its too big, it must be split into many frames
+    if first_is_virtual:
+      self.dst_vframes = int_linspace_steps_by_limit(0, dst_durs[0], VFRAME_SIZE_MAX)
+      assert len(self.dst_vframes) > 0
+      dst_durs = np.concatenate([self.dst_vframes, dst_durs[1:]])
+      src_durs = np.concatenate([self.dst_vframes, src_durs[1:]])
+    self.workspaces = self._create_workspaces(src_durs, dst_durs)
+    self.num_frames_to_encode = len(dst_durs)
     # there must be at lease one valid frame
     return len(dst_durs) > 0
 
@@ -380,10 +377,12 @@ class AudioEditContext(EditCtx):
     """
     assert src_packet.stream is self.src_stream
 
-    for frame_idx, frame, frame_data in self._decode(src_packet):
-      if self.is_done:
+    for frame, frame_data in self._decode(src_packet):
+      if self.is_done():
         break
-      self.is_done = frame_idx + 1 >= self.dst_frames_no
+
+      frame_idx = self.num_frames_encoded
+      self.num_frames_encoded += 1
       if len(self.workspaces) > 0 and self.workspaces[0].push_frame(frame_idx, frame, frame_data):
         while len(self.workspaces) > 0:
           frame = self.workspaces[0].pull_frame()
@@ -394,7 +393,7 @@ class AudioEditContext(EditCtx):
       else:
         yield self.dst_stream.encode(frame)
 
-    assert not self.is_done or len(self.workspaces) == 0
+    assert not self.is_done() or len(self.workspaces) == 0
 
   def _decode(self, src_packet: av.Packet) \
     -> Generator[Tuple[int, av.Packet, np.ndarray], None, None]:
@@ -411,25 +410,19 @@ class AudioEditContext(EditCtx):
         frame's data (not None only for the generated silent frames)
     """
     frames = src_packet.decode()
-    if self.frame_idx < len(self.dst_vframes) and len(frames) > 0:
+    if self.num_frames_encoded < len(self.dst_vframes) and len(frames) > 0:
       # generate silent frames
       src_frame = frames[0]
       src_data = src_frame.to_ndarray()
-      while self.frame_idx < len(self.dst_vframes):
-        frame_idx = self.frame_idx
-        self.frame_idx += 1
-
-        data_shape = (len(src_frame.layout.channels), self.dst_vframes[frame_idx])
+      while self.num_frames_encoded < len(self.dst_vframes):
+        data_shape = (len(src_frame.layout.channels), self.dst_vframes[self.num_frames_encoded])
         data = np.zeros(data_shape, dtype=src_data.dtype)
         v_frame = create_audio_frame(src_frame, data)
-        yield frame_idx, v_frame, data
+        yield v_frame, data
 
     for frame in frames:
-      frame_idx = self.frame_idx
-      self.frame_idx += 1
-
       frame.pts = None
-      yield frame_idx, frame, None
+      yield frame, None
 
 
 def create_audio_frame(template: av.AudioFrame, data: np.ndarray) -> av.AudioFrame:
