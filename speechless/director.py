@@ -1,3 +1,5 @@
+import json
+
 from logging import Logger
 from pathlib import Path
 from argparse import ArgumentParser
@@ -100,7 +102,12 @@ class CLI:
         idx += 1
 
       tl_changes = method.analyze(str(src), str(subs) if subs.is_file() else None)
-      editor = Editor.from_json(cfg, logger) if cfg.is_file() else Editor(logger=logger)
+      if cfg.is_file():
+        with open(cfg, encoding='UTF-8') as cfg_file:
+          editor = Editor.from_json(json.load(cfg_file), logger)
+      else:
+        editor = Editor(logger=logger)
+
       if no_edit:
         editor.export_json(dst / (dst_path.stem + '.json'), tl_changes)
       else:
