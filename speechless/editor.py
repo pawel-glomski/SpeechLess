@@ -1,14 +1,15 @@
 import av
 import json
-import argparse
 import numpy as np
 
 from typing import Dict, List, Tuple, Union
 from fractions import Fraction
 from logging import Logger
 from pathlib import Path
+from argparse import ArgumentParser
 
-from .utils import NULL_LOGGER
+from .utils.cli import cli_subcommand
+from .utils.logging import NULL_LOGGER
 from .edit_context import TimelineChange, EditCtx, VideoEditContext, AudioEditContext
 from .edit_context.common import restart_container
 
@@ -178,11 +179,11 @@ class Editor:
 
     return dst, ctx_map
 
-  def export_json(self, path, changes: Union[List[TimelineChange], np.ndarray] = None) -> None:
+  def export_json(self, path: str, changes: Union[List[TimelineChange], np.ndarray] = None) -> None:
     """Exports the current configuration of the editor with a list of timeline changes (if provided)
 
     Args:
-        path ([type]): Path of the output json file
+        path (str): Path of the output json file
         changes (Union[List[TimelineChange], np.ndarray]): Timeline changes - a list of
         TimelineChange instances or a numpy array of shape (N, 3), where N is the number of changes
     """
@@ -248,39 +249,45 @@ class Editor:
 
 ############################################### CLI ################################################
 
-NAME = 'editor'
-DESCRIPTION = 'Edits recordings according to the configuration'
-ARG_SRC = 'src'
-ARG_DST = 'dst'
-DEFAULT_ARGS = {}
 
+@cli_subcommand
+class CLI:
+  COMMAND = 'edit'
+  DESCRIPTION = 'Edits recordings according to the configuration'
+  ARG_SRC = 'src'
+  ARG_DST = 'dst'
+  DEFAULT_ARGS = {}
 
-def setup_arg_parser(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
-  """Sets up a CLI argument parser for this submodule
+  @staticmethod
+  def setup_arg_parser(parser: ArgumentParser) -> ArgumentParser:
+    """Sets up a CLI argument parser for this submodule
 
-  Returns:
-      argparse.ArgumentParser: Configured parser
-  """
-  parser.description = DESCRIPTION
-  parser.add_argument(ARG_SRC, help='Path of the recording to edit', type=Path, action='store')
-  parser.add_argument(ARG_DST, help='Path of the edited recording', type=Path, action='store')
-  parser.set_defaults(run=run_submodule)
-  # TODO
-  return parser
+    Returns:
+        ArgumentParser: Configured parser
+    """
+    parser.description = CLI.DESCRIPTION
+    parser.add_argument(CLI.ARG_SRC,
+                        help='Path of the recording to edit',
+                        type=Path,
+                        action='store')
+    parser.add_argument(CLI.ARG_DST, help='Path of the edited recording', type=Path, action='store')
+    parser.set_defaults(run=CLI.run_submodule)
+    # TODO
+    return parser
 
+  @staticmethod
+  def run_submodule(args: object, logger: Logger) -> None:
+    """Runs this submodule
 
-def run_submodule(args: object, logger: Logger) -> None:
-  """Runs this submodule
-
-  Args:
-      args (object): Arguments of this submodule (defined in setup_arg_parser)
-      logger (Logger): Logger for messages
-  """
-  # TODO
-  args = args.__dict__
-  with open('test.json', 'r', encoding='UTF-8') as fp:
-    json_cfg = json.load(fp)
-  editor = Editor.from_json(json_cfg, logger=logger)
-  changes = np.array(json_cfg[ID_TIMELINE_CHANGES])
-  # editor.export_json(changes, 'test2.json')
-  editor.edit(args[ARG_SRC], changes, args[ARG_DST])
+    Args:
+        args (object): Arguments of this submodule (defined in setup_arg_parser)
+        logger (Logger): Logger for messages
+    """
+    # TODO
+    args = args.__dict__
+    with open('test.json', 'r', encoding='UTF-8') as fp:
+      json_cfg = json.load(fp)
+    editor = Editor.from_json(json_cfg, logger=logger)
+    changes = np.array(json_cfg[ID_TIMELINE_CHANGES])
+    # editor.export_json(changes, 'test2.json')
+    editor.edit(args[CLI.ARG_SRC], changes, args[CLI.ARG_DST])

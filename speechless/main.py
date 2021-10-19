@@ -1,17 +1,23 @@
 import logging
 import argparse
+from pathlib import Path
+from importlib import import_module
 
-import speechless
+from speechless.utils.cli import SUBCOMMANDS
 
-SUBMODULES = [speechless.editor, speechless.downloader]
+for module_file in Path(__file__).parent.glob('*'):
+  if module_file.is_file() and str(module_file).endswith('.py') and '__' not in str(module_file):
+    module = f'speechless.{module_file.stem}'
+    if module != __name__:
+      import_module(module)
 
 
 def main():
   parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-  subparsers = parser.add_subparsers(title='submodule')
-  for submodule in SUBMODULES:
+  submodules = parser.add_subparsers()
+  for submodule in SUBCOMMANDS:
     submodule.setup_arg_parser(
-        subparsers.add_parser(submodule.NAME,
+        submodules.add_parser(submodule.COMMAND,
                               help=submodule.DESCRIPTION,
                               formatter_class=argparse.ArgumentDefaultsHelpFormatter))
   args = parser.parse_args()

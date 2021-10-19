@@ -1,12 +1,6 @@
-import logging
 import numpy as np
 
 Real = np.double
-
-NULL_LOGGER = logging.getLogger('null')
-NULL_LOGGER.handlers = [logging.NullHandler()]
-NULL_LOGGER.propagate = False
-
 
 def ranges_of_truth(arr: np.ndarray) -> np.ndarray:
   """Returns a list of ranges, for which elements of a specified array are True. For example:

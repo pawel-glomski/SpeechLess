@@ -1,10 +1,11 @@
 import av
 import numpy as np
+
 from typing import Generator, List
 from av.video.stream import VideoStream
 
-from ..utils import Real
 from .common import EditCtx, TimelineChange
+from speechless.utils.math import Real
 
 DROP_FRAME_PTS = -1
 

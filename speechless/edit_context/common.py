@@ -1,7 +1,9 @@
 import av
 import numpy as np
+
 from typing import Dict, List, Tuple
-from speechless.utils import Real
+
+from speechless.utils.math import Real
 
 
 class TimelineChange:

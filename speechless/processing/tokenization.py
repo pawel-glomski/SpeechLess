@@ -1,15 +1,15 @@
 import re
-import spacy
+
 from typing import List, Tuple
 
-from ..edit_context import TimelineChange
+from speechless.edit_context import TimelineChange
 
 TOKEN_SEPARATOR = ' '
 SENTENCE_SEPARATOR = '.'
 SENTENCE_SEPARATOR_ALTERNATIVES = [',']
 
 
-class TimedToken:
+class EditToken:
   TEXT_SUB_PATTERNS = re.compile(r'(\[[^\]]*\])|'  # text in []
                                  r'(\([^\)]*\))')  # text in ()
   WHITESPACE_SUB_PATTERNS = re.compile(r'(^\s+)|'  # whitespaces at the beginning
@@ -21,7 +21,8 @@ class TimedToken:
     self.text = self.WHITESPACE_SUB_PATTERNS.sub('', self.text)
     self.start_time = start_time
     self.end_time = end_time
-    self.pos = None  # position in the document (assigned by Director)
+    self.start_pos = None  # position in the document (character)
+    self.index = None  # index of the token in the document
     assert self.start_time < self.end_time
 
   def time_range(self) -> Tuple[float, float]:
@@ -37,29 +38,30 @@ class TimedToken:
     return len(self.text)
 
 
-class Language:
-  _nlp: spacy.language.Language = None
-
-  @staticmethod
-  def analyze(text: str) -> spacy.tokens.Doc:
-    if Language._nlp is None:
-      Language._nlp = spacy.load('en_core_web_md',
-                                 disable=['tagger', 'attribute_ruler', 'lemmatizer', 'ner'])
-    return Language._nlp(text)  # pylint: disable=not-callable
+def spacy_nlp(text: str):
+  if not hasattr(spacy_nlp, 'nlp'):  # lazy initialization of spacy
+    import spacy  # pylint: disable=import-outside-toplevel
+    spacy_nlp.nlp = spacy.load('en_core_web_md',
+                               disable=['tagger', 'attribute_ruler', 'lemmatizer', 'ner'])
+  return spacy_nlp(text)
 
 
-def sentence_segmentation(transcript: List[TimedToken]):
+def sentence_segmentation(transcript: List[EditToken]) -> List[List[EditToken]]:
   # 0. Add a separator between tokens
-  transcript[0].pos = 0
+  transcript[0].start_pos = 0
   for token, next_token in zip(transcript[:-1], transcript[1:]):
     token.text += TOKEN_SEPARATOR
-    next_token.pos = token.pos + len(token)
+    next_token.start_pos = token.start_pos + len(token)
+
+  # assign indices (useful when working with sentences)
+  for idx, token in enumerate(transcript):
+    token.index = idx
 
   raw_transcript = ''.join([token.text for token in transcript])
-  sentences: List[List[TimedToken]] = []
+  sentences: List[List[EditToken]] = []
 
   # 1. Segment using Spacy
-  doc = Language.analyze(raw_transcript)
+  doc = spacy_nlp(raw_transcript)
   nlp_sents = list(doc.sents)
   assert nlp_sents[0].start_char == 0
 
@@ -69,7 +71,7 @@ def sentence_segmentation(transcript: List[TimedToken]):
     sentences.append([])
     while token_idx < len(transcript):
       token = transcript[token_idx]
-      if token.pos < sent.end_char:
+      if token.start_pos < sent.end_char:
         # note, that here we only check if the token starts within the current sentence, and not
         # if it ends inside it aswell. This means, that if a token extends outside of the current
         # sentence, this sentence will consume some part (or all) of the next sentence(s)
@@ -85,7 +87,7 @@ def sentence_segmentation(transcript: List[TimedToken]):
   sent_idx = 0
   while sent_idx < len(sentences):
     sent = sentences[sent_idx]
-    # sent_len = (sent[-1].pos - sent[0].pos) + len(sent[-1])
+    # sent_len = (sent[-1].start_pos - sent[0].start_pos) + len(sent[-1])
     # if sent_len > 20 * 5 * 2:  # (avg_sent_length) * (avg_eng_word) * 2
     for prev_token_idx, (prev_token, token) in enumerate(zip(sent[:-1], sent[1:])):
       if (token.start_time - prev_token.end_time) > 3.0:
@@ -116,6 +118,6 @@ def sentence_segmentation(transcript: List[TimedToken]):
       else:
         assert sent[-1].text.endswith(SENTENCE_SEPARATOR)
       for token in next_sent:
-        token.pos += pos_diff
+        token.start_pos += pos_diff
 
   return sentences
