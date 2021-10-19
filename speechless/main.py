@@ -5,6 +5,7 @@ from importlib import import_module
 
 from speechless.utils.cli import SUBCOMMANDS
 
+# import modules: speechless.*
 for module_file in Path(__file__).parent.glob('*'):
   if module_file.is_file() and str(module_file).endswith('.py') and '__' not in str(module_file):
     module = f'speechless.{module_file.stem}'
@@ -14,12 +15,12 @@ for module_file in Path(__file__).parent.glob('*'):
 
 def main():
   parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-  submodules = parser.add_subparsers()
-  for submodule in SUBCOMMANDS:
-    submodule.setup_arg_parser(
-        submodules.add_parser(submodule.COMMAND,
-                              help=submodule.DESCRIPTION,
-                              formatter_class=argparse.ArgumentDefaultsHelpFormatter))
+  subcommands = parser.add_subparsers()
+  for subcommand in SUBCOMMANDS:
+    subcommand.setup_arg_parser(
+        subcommands.add_parser(subcommand.COMMAND,
+                               help=subcommand.DESCRIPTION,
+                               formatter_class=argparse.ArgumentDefaultsHelpFormatter))
   args = parser.parse_args()
 
   if len(args.__dict__) > 0 and hasattr(args, 'run'):

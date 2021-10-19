@@ -1,6 +1,7 @@
 import subprocess
-import numpy as np
 import av
+import numpy as np
+
 from av.audio.frame import format_dtypes
 from typing import Dict, Generator, Tuple
 from logging import Logger

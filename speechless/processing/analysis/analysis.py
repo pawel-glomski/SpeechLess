@@ -34,5 +34,7 @@ ANALYSIS_METHODS = []
 
 
 def analysis_method_cli(method_class):
+  assert hasattr(method_class, 'prepare_method') and hasattr(method_class, 'setup_arg_parser')
+
   ANALYSIS_METHODS.append(method_class)
   return method_class

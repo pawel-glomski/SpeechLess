@@ -5,7 +5,7 @@ from argparse import ArgumentParser
 from speechless.editor import Editor
 
 from .utils.cli import cli_subcommand, FORMATTER_CLASS
-from .processing.analysis.analysis import ANALYSIS_METHODS, ARG_PREPARE_METHOD
+from .processing.analysis import ANALYSIS_METHODS, ARG_PREPARE_METHOD
 
 
 @cli_subcommand

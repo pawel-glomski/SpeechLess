@@ -1,3 +1,5 @@
+from .analysis import AnalysisDomain, AnalysisMethod, ANALYSIS_METHODS, ARG_PREPARE_METHOD
+
 from pathlib import Path
 from importlib import import_module
 
