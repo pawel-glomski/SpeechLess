@@ -1,4 +1,5 @@
 import webvtt
+
 from typing import Callable, List
 from pathlib import Path
 
@@ -8,6 +9,14 @@ REGISTERED_READERS: List[Callable[[str], List[EditToken]]] = []
 
 
 def read_subtitles(sub_path: str) -> List[EditToken]:
+  """Reads subtitles of a recording
+
+  Args:
+      sub_path (str): Path to the subtitles
+
+  Returns:
+      List[EditToken]: Tokenized transcript
+  """
   path = Path(sub_path).resolve()
   for reader, extensions in REGISTERED_READERS:
     if path.suffix[1:].lower() in extensions:
@@ -17,11 +26,16 @@ def read_subtitles(sub_path: str) -> List[EditToken]:
   return None
 
 
-def sub_reader(extensions: List[str]):
+def sub_reader(extensions: List[str]) -> Callable:
+  """Registers a new reader function. New readers should reside in this file
+
+  Args:
+      extensions (List[str]): A list of extensions supported by this reader
+  """
 
   def register(reader_func: Callable[[str], List[EditToken]]):
     assert isinstance(extensions, list)
-    REGISTERED_READERS.append((reader_func, extensions))
+    REGISTERED_READERS.append((reader_func, [e.lower() for e in extensions]))
     return reader_func
 
   return register

@@ -3,7 +3,7 @@ import argparse
 from pathlib import Path
 from importlib import import_module
 
-from speechless.utils.cli import SUBCOMMANDS
+from speechless.utils.cli import SUBCOMMANDS, FORMATTER_CLASS
 
 # import modules: speechless.*
 for module_file in Path(__file__).parent.glob('*'):
@@ -14,13 +14,13 @@ for module_file in Path(__file__).parent.glob('*'):
 
 
 def main():
-  parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+  parser = argparse.ArgumentParser(formatter_class=FORMATTER_CLASS)
   subcommands = parser.add_subparsers()
   for subcommand in SUBCOMMANDS:
     subcommand.setup_arg_parser(
         subcommands.add_parser(subcommand.COMMAND,
                                help=subcommand.DESCRIPTION,
-                               formatter_class=argparse.ArgumentDefaultsHelpFormatter))
+                               formatter_class=FORMATTER_CLASS))
   args = parser.parse_args()
 
   if len(args.__dict__) > 0 and hasattr(args, 'run'):
