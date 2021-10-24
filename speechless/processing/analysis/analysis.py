@@ -1,11 +1,10 @@
-import numpy as np
-
 from abc import ABC, abstractmethod
 from typing import List
 from enum import Enum, auto
 from logging import Logger
 
 from speechless.processing.tokenization import EditToken
+from speechless.edit_context import TimelineChange
 
 
 class AnalysisDomain(Enum):
@@ -23,7 +22,7 @@ class AnalysisMethod(ABC):
 
   @abstractmethod
   def analyze(self, recording_path: str, sentences: List[List[EditToken]], logger: Logger) \
-    -> np.ndarray:
+    -> List[TimelineChange]:
     raise NotImplementedError()
 
 

@@ -84,6 +84,7 @@ class AudioReader:
 def read_entire_audio(file_path: str,
                       aud_stream_idx: int = None,
                       aud_format: str = 'f32le',
+                      sample_rate: int = None,
                       logger: Logger = NULL_LOGGER) -> Tuple[np.ndarray, Dict[StreamInfo, object]]:
   """Reads an entire audio stream from a recording
 
@@ -92,11 +93,14 @@ def read_entire_audio(file_path: str,
       aud_stream_idx (int, optional): Index of the audio stream (0 -> first, 1 -> second). \
         Defaults to None (the first audio stream)
       aud_format (str, optional): A desired audio format. Defaults to 'f32le'
+      sample_rate (int, optional): A desired sample rate. This will be the sample rate of the \
+        returned signal.
       logger (Logger, optional): Logger for messages. Defaults to NULL_LOGGER
 
   Returns:
       Tuple[np.ndarray, Dict[StreamInfo, object]]: The entire audio stream in the specified format \
-        and a dictionary with info about the stream
+        and a dictionary with info about the (original) stream - sample rate information will be \
+        that of the original stream, not the one specified here
   """
   file_path = str(Path(file_path).resolve())
   with av.open(file_path) as container:
@@ -107,11 +111,13 @@ def read_entire_audio(file_path: str,
                        f'the first one (stream #{container.streams.audio[aud_stream_idx].index})')
 
     acodec = f'pcm_{aud_format}'
-    process = subprocess.Popen(stdout=subprocess.PIPE,
-                               args=[
-                                   'ffmpeg', '-i', f'{file_path}', '-map', f'0:a:{aud_stream_idx}',
-                                   '-f', f'{aud_format}', '-acodec', f'{acodec}', 'pipe:1'
-                               ])
+    command = [
+        'ffmpeg', '-i', f'{file_path}', '-map', f'0:a:{aud_stream_idx}', '-f', f'{aud_format}',
+        '-acodec', f'{acodec}'
+    ]
+    command += ['-ar', f'{sample_rate}'] if sample_rate is not None else []
+    command += ['pipe:1']
+    process = subprocess.Popen(stdout=subprocess.PIPE, args=command)
     buffer, _ = process.communicate()
 
     astream = container.streams.audio[aud_stream_idx]

@@ -2,13 +2,16 @@ import librosa
 import numpy as np
 
 from logging import Logger
-from typing import Dict, Tuple
+from typing import Dict, List
 from argparse import ArgumentParser
 
 from .analysis import AnalysisMethod, AnalysisDomain, analysis_method_cli, ARG_PREPARE_METHOD
 from speechless.readers import StreamInfo, read_entire_audio
 from speechless.utils.logging import NULL_LOGGER
 from speechless.utils.math import ranges_of_truth
+from speechless.edit_context import TimelineChange
+
+N_FFT = 2048
 
 
 class SpectrogramAnalysis(AnalysisMethod):
@@ -19,7 +22,7 @@ class SpectrogramAnalysis(AnalysisMethod):
     self.dur_multi = dur_multi
     self.logger = logger
 
-  def analyze(self, recording_path: str, _) -> Tuple[np.ndarray, float]:
+  def analyze(self, recording_path: str, _) -> List[TimelineChange]:
     sig, stream_info = read_entire_audio(recording_path, logger=self.logger)
     scored_segments = SpectrogramAnalysis.optimize_signal(sig[0], stream_info, self.threshold)
     segment_size = stream_info[StreamInfo.FRAME_SIZE] / stream_info[StreamInfo.SAMPLE_RATE]
@@ -63,8 +66,7 @@ class SpectrogramAnalysis(AnalysisMethod):
 
     # it generates one more for some reason
     y = librosa.power_to_db(
-        librosa.feature.melspectrogram(sig, sr=SAMPLE_RATE, n_fft=3 * SEG_LEN,
-                                       hop_length=SEG_LEN).T)[:-1]
+        librosa.feature.melspectrogram(sig, sr=SAMPLE_RATE, n_fft=N_FFT, hop_length=SEG_LEN).T)
     y -= np.median(y)
     y[y < 0] = 0
     y /= np.max(y)
