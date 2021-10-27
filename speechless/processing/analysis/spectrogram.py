@@ -17,7 +17,7 @@ N_FFT = 2048
 class SpectrogramAnalysis(AnalysisMethod):
 
   def __init__(self, threshold: float, dur_multi: float, logger: Logger = NULL_LOGGER):
-    super().__init__('Spectrogram Analysis', [AnalysisDomain.AUDIO])
+    super().__init__('Spectrogram Analysis', [AnalysisDomain.AUDIO], logger)
     self.threshold = threshold
     self.dur_multi = dur_multi
     self.logger = logger
@@ -98,8 +98,8 @@ class CLI:
   DEFAULT_ARGS = {ARG_THRESHOLD: 1.5, ARG_DUR_MULTI: 0, ARG_PAD: 0}
 
   @staticmethod
-  def prepare_method(args) -> 'SpectrogramAnalysis':
-    return SpectrogramAnalysis(args[CLI.ARG_THRESHOLD], args[CLI.ARG_DUR_MULTI])
+  def prepare_method(args, logger) -> 'SpectrogramAnalysis':
+    return SpectrogramAnalysis(args[CLI.ARG_THRESHOLD], args[CLI.ARG_DUR_MULTI], logger=logger)
 
   @staticmethod
   def setup_arg_parser(parser: ArgumentParser) -> ArgumentParser:
