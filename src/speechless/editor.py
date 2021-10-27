@@ -198,13 +198,16 @@ class Editor:
       json.dump(config, fp)
 
   @staticmethod
-  def from_json(json_settings: dict, logger: Logger = NULL_LOGGER) -> 'Editor':
+  def from_json(json_settings: dict,
+                logger: Logger = NULL_LOGGER) -> Tuple['Editor', List[TimelineChange]]:
     """Constructs an Editor from a dictionary of settings.
 
     Returns:
-        Editor: Configured editor prepared for editing
+        Tuple['Editor', List[TimelineChange]]: Configured editor prepared for editing and timeline \
+          changes
     """
     editor = Editor(logger=logger)
+    changes = []
     for identifier, config in json_settings.items():
       identifier = identifier.lower()
 
@@ -212,9 +215,12 @@ class Editor:
         settings = editor.settings.setdefault(identifier, {})  # stream type
       elif identifier.isnumeric():
         settings = editor.settings.setdefault(int(identifier), {})  # stream idx
+      elif identifier == ID_TIMELINE_CHANGES:
+        for tl_change in config:
+          changes.append(np.array(tl_change).reshape((1, -1)))
+        continue
       else:
-        if identifier != ID_TIMELINE_CHANGES:
-          logger.warning(f'Skipping unrecognized identifier: {identifier}')
+        logger.warning(f'Skipping unrecognized identifier: {identifier}')
         continue
 
       for key, value in config.items():
@@ -244,7 +250,11 @@ class Editor:
           settings[key] = bool(value)
         else:
           logger.warning(f'Skipping unrecognized setting: {key}:')
-    return editor
+
+    if len(changes) > 0:
+      changes = TimelineChange.from_numpy(np.concatenate(changes, axis=0))
+
+    return editor, changes
 
 
 ############################################### CLI ################################################

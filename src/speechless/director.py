@@ -91,7 +91,7 @@ class CLI:
     no_edit = args[CLI.ARG_NO_EDIT]
     assert dst.is_dir()
 
-    method = args[ARG_PREPARE_METHOD](args)
+    method = args[ARG_PREPARE_METHOD](args, logger)
 
     if src.is_file():
       dir_files = list(dst.glob('*'))

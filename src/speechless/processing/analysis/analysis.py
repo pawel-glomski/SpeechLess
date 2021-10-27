@@ -3,7 +3,6 @@ from typing import List, Type
 from enum import Enum, auto
 from logging import Logger
 
-from speechless.processing.tokenization import EditToken
 from speechless.edit_context import TimelineChange
 
 
