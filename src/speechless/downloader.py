@@ -1,17 +1,21 @@
-import argparse
 import youtube_dl
+
 from multiprocessing import Pool
 from logging import Logger
 from pathlib import Path
 from typing import List
+from argparse import ArgumentParser
 
-from .utils import NULL_LOGGER
+from .utils.cli import cli_subcommand
+from .utils.logging import NULL_LOGGER
 
 SUBTITLES_FORMAT = 'vtt'
 QUERY_JOBS_MULTI = 4
 DOWNLOAD_RETRIES = 6
 SLOW_DOWNLOAD_TIMEOUT = 3
 NO_SUBS_LANGUAGE = 'none'
+OUT_VIDEO = 'video'
+OUT_AUDIO = 'audio'
 OUT_RECORDING = 'recording'
 OUT_SUBTITLES = 'subs'
 
@@ -185,8 +189,9 @@ class Downloader:
         return url
     elif stype == OUT_RECORDING:
       out_format = 'worst' if self.with_video else 'worstaudio'
+      out_name = OUT_VIDEO if self.with_video else OUT_AUDIO
       if self._download(url, {
-          **common_options, 'outtmpl': dst_path.format(self.dst, OUT_RECORDING),
+          **common_options, 'outtmpl': dst_path.format(self.dst, out_name),
           'format': out_format
       }, f'[ VID ] {url} - '):
         self.logger.info(f'[ VID ] {url}')
@@ -225,85 +230,89 @@ class Downloader:
 
 ############################################### CLI ################################################
 
-NAME = 'downloader'
-DESCRIPTION = 'Downloads specified videos'
-ARG_SRC = 'src'
-ARG_DST = 'dst'
-ARG_LANG = 'lang'
-ARG_JOBS = 'jobs'
-ARG_MIN_SPEED = 'min_speed'
-ARG_BUFFER_SIZE = 'buffer_size'
-ARG_WITH_VIDEO = 'with_video'
-DEFAULT_ARGS = {
-    ARG_LANG: NO_SUBS_LANGUAGE,
-    ARG_JOBS: 4,
-    ARG_MIN_SPEED: 0.1,
-    ARG_BUFFER_SIZE: 0.5,
-    ARG_WITH_VIDEO: False
-}
 
+@cli_subcommand
+class CLI:
 
-def setup_arg_parser(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
-  """Sets up a CLI argument parser for this submodule
+  COMMAND = 'download'
+  DESCRIPTION = 'Downloads specified recordings'
+  ARG_SRC = 'src'
+  ARG_DST = 'dst'
+  ARG_LANG = 'lang'
+  ARG_JOBS = 'jobs'
+  ARG_MIN_SPEED = 'min_speed'
+  ARG_BUFFER_SIZE = 'buffer_size'
+  ARG_WITH_VIDEO = 'with_video'
+  DEFAULT_ARGS = {
+      ARG_LANG: NO_SUBS_LANGUAGE,
+      ARG_JOBS: 4,
+      ARG_MIN_SPEED: 0.1,
+      ARG_BUFFER_SIZE: 0.5,
+      ARG_WITH_VIDEO: False
+  }
 
-  Returns:
-      argparse.ArgumentParser: Configured parser
-  """
-  parser.description = DESCRIPTION
-  parser.add_argument(ARG_SRC,
-                      help='Path of the file with links to videos',
-                      type=str,
-                      action='store')
-  parser.add_argument(ARG_DST,
-                      help='Path of the destination directory for downloaded videos',
-                      type=str,
-                      action='store')
-  parser.add_argument('-l',
-                      f'--{ARG_LANG}',
-                      help='Language used in the videos',
-                      type=str,
-                      action='store',
-                      default=DEFAULT_ARGS[ARG_LANG])
-  parser.add_argument('-j',
-                      f'--{ARG_JOBS}',
-                      help='Number of threads to use for downloading',
-                      type=int,
-                      action='store',
-                      default=DEFAULT_ARGS[ARG_JOBS])
-  parser.add_argument('-m',
-                      f'--{ARG_MIN_SPEED}',
-                      help='Minimum download speed to reset the connection [MiB]',
-                      type=float,
-                      action='store',
-                      default=DEFAULT_ARGS[ARG_MIN_SPEED])
-  parser.add_argument('-b',
-                      f'--{ARG_BUFFER_SIZE}',
-                      help='Downloading buffer size [MiB]',
-                      type=float,
-                      action='store',
-                      default=DEFAULT_ARGS[ARG_BUFFER_SIZE])
-  parser.add_argument('-v',
-                      f'--{ARG_WITH_VIDEO}',
-                      help='Download also video stream',
-                      action='store_true',
-                      default=DEFAULT_ARGS[ARG_WITH_VIDEO])
-  parser.set_defaults(run=run_submodule)
-  return parser
+  @staticmethod
+  def setup_arg_parser(parser: ArgumentParser) -> ArgumentParser:
+    """Sets up a CLI argument parser for this submodule
 
+    Returns:
+        ArgumentParser: Configured parser
+    """
+    parser.description = CLI.DESCRIPTION
+    parser.add_argument(CLI.ARG_SRC,
+                        help='Path of the file with links to videos',
+                        type=str,
+                        action='store')
+    parser.add_argument(CLI.ARG_DST,
+                        help='Path of the destination directory for downloaded videos',
+                        type=str,
+                        action='store')
+    parser.add_argument('-l',
+                        f'--{CLI.ARG_LANG}',
+                        help='Language used in the videos',
+                        type=str,
+                        action='store',
+                        default=CLI.DEFAULT_ARGS[CLI.ARG_LANG])
+    parser.add_argument('-j',
+                        f'--{CLI.ARG_JOBS}',
+                        help='Number of threads to use for downloading',
+                        type=int,
+                        action='store',
+                        default=CLI.DEFAULT_ARGS[CLI.ARG_JOBS])
+    parser.add_argument('-m',
+                        f'--{CLI.ARG_MIN_SPEED}',
+                        help='Minimum download speed to reset the connection [MiB]',
+                        type=float,
+                        action='store',
+                        default=CLI.DEFAULT_ARGS[CLI.ARG_MIN_SPEED])
+    parser.add_argument('-b',
+                        f'--{CLI.ARG_BUFFER_SIZE}',
+                        help='Downloading buffer size [MiB]',
+                        type=float,
+                        action='store',
+                        default=CLI.DEFAULT_ARGS[CLI.ARG_BUFFER_SIZE])
+    parser.add_argument('-v',
+                        f'--{CLI.ARG_WITH_VIDEO}',
+                        help='Download also video stream',
+                        action='store_true',
+                        default=CLI.DEFAULT_ARGS[CLI.ARG_WITH_VIDEO])
+    parser.set_defaults(run=CLI.run_submodule)
+    return parser
 
-def run_submodule(args: object, logger: Logger) -> None:
-  """Runs this submodule
+  @staticmethod
+  def run_submodule(args: object, logger: Logger) -> None:
+    """Runs this submodule
 
-  Args:
-      args (object): Arguments of this submodule (defined in setup_arg_parser)
-      logger (Logger): Logger for messages
-  """
-  args = args.__dict__
-  dl = Downloader(dst=args[ARG_DST],
-                  lang=args[ARG_LANG],
-                  jobs=args[ARG_JOBS],
-                  min_speed=args[ARG_MIN_SPEED],
-                  buffer_size=args[ARG_BUFFER_SIZE],
-                  with_video=args[ARG_WITH_VIDEO],
-                  logger=logger)
-  dl.download(args[ARG_SRC])
+    Args:
+        args (object): Arguments of this submodule (defined in setup_arg_parser)
+        logger (Logger): Logger for messages
+    """
+    args = args.__dict__
+    dl = Downloader(dst=args[CLI.ARG_DST],
+                    lang=args[CLI.ARG_LANG],
+                    jobs=args[CLI.ARG_JOBS],
+                    min_speed=args[CLI.ARG_MIN_SPEED],
+                    buffer_size=args[CLI.ARG_BUFFER_SIZE],
+                    with_video=args[CLI.ARG_WITH_VIDEO],
+                    logger=logger)
+    dl.download(args[CLI.ARG_SRC])

@@ -1,12 +1,13 @@
 import av
 import numpy as np
 import pytsmod as tsm
+
 from typing import Generator, List, Tuple
 from av.audio.stream import AudioStream
 from av.audio.frame import format_dtypes
 
-from ..utils import ranges_of_truth, int_linspace_steps_by_limit
 from .common import EditCtx, TimelineChange, Real
+from speechless.utils.math import ranges_of_truth, int_linspace_steps_by_limit
 
 WIN_TYPE = 'hann'
 WIN_SIZE = 1024

@@ -1,9 +1,11 @@
 {
     "video": {
+        "codec": "h264",
         "codec-options": {
-            "crf": "40",
+            "crf": "10",
             "profile": "high"
         },
+        "resolution": [ 256, 144 ],
         "max-fps": 120
     },
     "1": {
@@ -12,11 +14,8 @@
     },
     "audio": {
         "codec": "aac",
-        "bitrate": 128000,
+        "bitrate": 188000,
         "sample-rate": 44100,
         "mono": true
-    },
-    "timeline-changes": [
-        [0, Infinity, 0.5] 
-    ]
+    }
 }
