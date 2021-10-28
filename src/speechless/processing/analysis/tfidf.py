@@ -1,11 +1,11 @@
+import gensim.downloader
+
+from gensim.corpora import Dictionary
+from gensim.models import TfidfModel
 from argparse import ArgumentParser
 from logging import Logger
 from pathlib import Path
 from typing import List
-
-import gensim.downloader
-from gensim.corpora import Dictionary
-from gensim.models import TfidfModel
 
 from speechless.edit_context.common import TimelineChange
 from speechless.processing.analysis.analysis import (ARG_PREPARE_METHOD, AnalysisDomain,
@@ -13,24 +13,27 @@ from speechless.processing.analysis.analysis import (ARG_PREPARE_METHOD, Analysi
 from speechless.processing.tokenization import EditToken, sentence_segmentation
 from speechless.readers.subtitles import vtt_reader
 from speechless.utils.logging import NULL_LOGGER
+from speechless.utils.storage import make_cache_dir_rel
 
-DICTIONARY_FILE = 'tfidf_dictionary.dic'
-MODEL_FILE = 'tfidf_model.model'
+GENSIM_CACHE_DIR = make_cache_dir_rel('gensim')
+CORPUS_DIR = str(GENSIM_CACHE_DIR/'gensim-data/')
+DICTIONARY_FILE = str(GENSIM_CACHE_DIR/'tfidf_dictionary.dic')
+MODEL_FILE = str(GENSIM_CACHE_DIR/'tfidf_model.model')
 
 
 class TfidfAnalysis(AnalysisMethod):
 
-  def __init__(self, dataset: str, sentence_threshold: float, logger: Logger = NULL_LOGGER) -> None:
-    super().__init__('Tf-idf Analysis', [AnalysisDomain.TEXT])
-    self.logger = logger
+  def __init__(self, corpus: str, sentence_threshold: float, logger: Logger = NULL_LOGGER) -> None:
+    super().__init__('Tf-idf Analysis', [AnalysisDomain.TEXT], logger)
+
     self.sentence_threshold = sentence_threshold
-    gensim.downloader.BASE_DIR = '/opt/workspace/SpeechLess/gensim-data'
-    gensim.downloader.base_dir = '/opt/workspace/SpeechLess/gensim-data'
+    gensim.downloader.BASE_DIR = CORPUS_DIR
+    gensim.downloader.base_dir = CORPUS_DIR
     if Path(DICTIONARY_FILE).exists() and Path(MODEL_FILE).exists():
       self.data_dict = Dictionary.load(DICTIONARY_FILE)
       self.model = TfidfModel.load(MODEL_FILE)
     else:
-      data = gensim.downloader.load(dataset)
+      data = gensim.downloader.load(corpus)
       self.data_dict = Dictionary(data)
       self.data_dict.save(DICTIONARY_FILE)
       corpus = [self.data_dict.doc2bow(line) for line in data]
@@ -70,13 +73,13 @@ class TfidfAnalysis(AnalysisMethod):
 class CLI:
   COMMAND = 'tfidf'
   DESCRIPTION = 'Tf-idf analysis'
-  ARG_DATASET = 'dataset'
+  ARG_CORPUS = 'corpus'
   ARG_SENTENCE_THRESHOLD = 'sentence_threshold'
-  DEFAULT_ARGS = {ARG_DATASET: 'text8', ARG_SENTENCE_THRESHOLD: 0.2}
+  DEFAULT_ARGS = {ARG_CORPUS: 'text8', ARG_SENTENCE_THRESHOLD: 0.2}
 
   @staticmethod
-  def prepare_method(args) -> 'TfidfAnalysis':
-    return TfidfAnalysis(args[CLI.ARG_DATASET], args[CLI.ARG_SENTENCE_THRESHOLD])
+  def prepare_method(args, logger: Logger) -> 'TfidfAnalysis':
+    return TfidfAnalysis(args[CLI.ARG_CORPUS], args[CLI.ARG_SENTENCE_THRESHOLD], logger=logger)
 
   @staticmethod
   def setup_arg_parser(parser: ArgumentParser) -> ArgumentParser:
@@ -86,11 +89,11 @@ class CLI:
         ArgumentParser: Configured parser
     """
     parser.add_argument('-d',
-                        f'--{CLI.ARG_DATASET}',
-                        help='Dataset (TODO)',
+                        f'--{CLI.ARG_CORPUS}',
+                        help='Corpus (TODO)',
                         type=str,
                         action='store',
-                        default=CLI.DEFAULT_ARGS[CLI.ARG_DATASET])
+                        default=CLI.DEFAULT_ARGS[CLI.ARG_CORPUS])
     parser.add_argument('-t',
                         f'--{CLI.ARG_SENTENCE_THRESHOLD}',
                         help='Sentence threshold',
