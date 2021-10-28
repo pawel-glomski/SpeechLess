@@ -25,7 +25,7 @@ class SpectrogramAnalysis(AnalysisMethod):
         threshold (float): Threshold difference value, under which timesteps will be edited
         dur_multi (float): Duration multiplier of timesteps selected for editing
         logger (Logger, optional): Logger for messages. Defaults to NULL_LOGGER.
-    """    
+    """
     super().__init__('Spectrogram Analysis', [AnalysisDomain.AUDIO], logger)
     self.threshold = threshold
     self.dur_multi = dur_multi
