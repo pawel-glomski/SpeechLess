@@ -17,6 +17,15 @@ N_FFT = 2048
 class SpectrogramAnalysis(AnalysisMethod):
 
   def __init__(self, threshold: float, dur_multi: float, logger: Logger = NULL_LOGGER):
+    """Spectrogram based analysis method. This method looks at features of 2 adjacent timesteps and
+    removes segments, for which the difference is small, thus reducing redundance in the signal.
+    This method will remove silence and prolongations of sounds, syllables, words, or phrases.
+
+    Args:
+        threshold (float): Threshold difference value, under which timesteps will be edited
+        dur_multi (float): Duration multiplier of timesteps selected for editing
+        logger (Logger, optional): Logger for messages. Defaults to NULL_LOGGER.
+    """    
     super().__init__('Spectrogram Analysis', [AnalysisDomain.AUDIO], logger)
     self.threshold = threshold
     self.dur_multi = dur_multi
@@ -91,7 +100,10 @@ class SpectrogramAnalysis(AnalysisMethod):
 @analysis_method_cli
 class CLI:
   COMMAND = 'spectrogram'
-  DESCRIPTION = 'Audio spectrogram analysis'
+  DESCRIPTION = """
+    Looks at spectrogram features of 2 adjacent timesteps and removes segments, for which the
+    difference is small, thus reducing redundance in the signal. This method will remove silence and
+    prolongations of sounds, syllables, words, or phrases.""".replace('\n', '')
   ARG_THRESHOLD = 'threshold'
   ARG_DUR_MULTI = 'dur_multi'
   ARG_PAD = 'padding'
