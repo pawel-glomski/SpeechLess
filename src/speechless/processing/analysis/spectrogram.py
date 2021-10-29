@@ -5,7 +5,7 @@ from logging import Logger
 from typing import Dict, List
 from argparse import ArgumentParser
 
-from .analysis import AnalysisMethod, AnalysisDomain, analysis_method_cli, ARG_PREPARE_METHOD
+from .analysis import AnalysisMethod, AnalysisDomain, analysis_method_cli, ARG_PREPARE_METHOD_FN
 from speechless.readers import StreamInfo, read_entire_audio
 from speechless.utils.logging import NULL_LOGGER
 from speechless.utils.math import ranges_of_truth
@@ -138,4 +138,4 @@ class CLI:
                         type=float,
                         action='store',
                         default=CLI.DEFAULT_ARGS[CLI.ARG_PAD])
-    parser.set_defaults(**{ARG_PREPARE_METHOD: CLI.prepare_method})
+    parser.set_defaults(**{ARG_PREPARE_METHOD_FN: CLI.prepare_method})

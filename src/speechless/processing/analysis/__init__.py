@@ -1,4 +1,4 @@
-from .analysis import AnalysisDomain, AnalysisMethod, ANALYSIS_METHODS, ARG_PREPARE_METHOD
+from .analysis import AnalysisDomain, AnalysisMethod, ANALYSIS_METHODS, ARG_PREPARE_METHOD_FN
 
 from pathlib import Path
 from importlib import import_module

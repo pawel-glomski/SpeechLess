@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import List
 
 from speechless.edit_context.common import TimelineChange
-from speechless.processing.analysis.analysis import (ARG_PREPARE_METHOD, AnalysisDomain,
+from speechless.processing.analysis.analysis import (ARG_PREPARE_METHOD_FN, AnalysisDomain,
                                                      AnalysisMethod, analysis_method_cli)
 from speechless.processing.tokenization import EditToken, make_timeline_changes, sentence_segmentation
 from speechless.readers.subtitles import read_subtitles
@@ -99,4 +99,4 @@ class CLI:
                         type=float,
                         action='store',
                         default=CLI.DEFAULT_ARGS[CLI.ARG_SENTENCE_THRESHOLD])
-    parser.set_defaults(**{ARG_PREPARE_METHOD: CLI.prepare_method})
+    parser.set_defaults(**{ARG_PREPARE_METHOD_FN: CLI.prepare_method})
