@@ -306,6 +306,8 @@ class AudioEditContext(EditCtx):
       return False
 
     dst_durs = self._prepare_raw_dst_durations(src_durs, changes)
+    if len(dst_durs) == 0:
+      return False
     src_durs = src_durs[:len(dst_durs)]
 
     # convert from seconds to samples
