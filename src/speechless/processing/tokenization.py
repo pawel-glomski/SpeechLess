@@ -1,9 +1,12 @@
+import numpy as np
 import re
 import spacy
 
 from typing import List
+from math import inf
 
 from speechless.edit_context import TimelineChange
+from speechless.utils.math import ranges_of_truth
 
 TOKEN_SEPARATOR = ' '
 SENTENCE_SEPARATOR = '.'
@@ -36,6 +39,7 @@ class EditToken:
     self.end_time = end_time
     self.start_pos = None  # position in the document (character)
     self.index = None  # index of the token in the document
+    self.label = None
     assert self.start_time < self.end_time
 
   def as_timeline_change(self, duration_ratio: float) -> TimelineChange:
@@ -144,3 +148,30 @@ def sentence_segmentation(transcript: List[EditToken]) -> List[List[EditToken]]:
         token.start_pos += pos_diff
 
   return sentences
+
+
+def make_timeline_changes(tokens: List[EditToken],
+                          duration_ratio: float = 0.0) -> List[TimelineChange]:
+  """Create list of timeline changes ready for modification
+
+  Args:
+      tokens (List[EditToken]): List of labeled tokens
+      duration_ratio (float): Duration ratio for the timeline changes
+
+  Returns:
+      List[TimelineChanges]: List of changes, with intervals between words
+      and before first and after last word
+  """
+  rot = ranges_of_truth(np.array([token.label for token in tokens]))
+  changes = []
+  for r in rot:
+    start = tokens[r[0] - 1].end_time if r[0] > 0 else 0.0
+    end = tokens[r[1]].start_time if r[1] < len(tokens) else inf
+    changes.append(TimelineChange(start, end, duration_ratio))
+  if len(changes) == 0:
+    return changes
+  if changes[0].beg != 0.0:
+    changes.insert(0, TimelineChange(0.0, tokens[0].start_time, duration_ratio))
+  if changes[-1].end != inf:
+    changes.append(TimelineChange(tokens[-1].end_time, inf, duration_ratio))
+  return changes
