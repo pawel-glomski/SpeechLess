@@ -198,8 +198,8 @@ class Editor:
       json.dump(config, fp)
 
   @staticmethod
-  def from_json(json_settings: dict,
-                logger: Logger = NULL_LOGGER) -> Tuple['Editor', List[TimelineChange]]:
+  def from_json(json_settings: dict, logger: Logger = NULL_LOGGER) \
+    -> Tuple['Editor', List[TimelineChange]]:
     """Constructs an Editor from a dictionary of settings.
 
     Returns:

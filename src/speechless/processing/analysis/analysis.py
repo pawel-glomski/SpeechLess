@@ -38,7 +38,7 @@ class AnalysisMethod(ABC):
 
 ############################################### CLI ################################################
 
-ARG_PREPARE_METHOD = 'prepare_fn'
+ARG_PREPARE_METHOD_FN = 'prepare_fn'
 ANALYSIS_METHODS = []
 
 

@@ -7,7 +7,7 @@ from argparse import ArgumentParser
 from speechless.editor import Editor
 
 from .utils.cli import cli_subcommand, FORMATTER_CLASS
-from .processing.analysis import ANALYSIS_METHODS, ARG_PREPARE_METHOD
+from .processing.analysis import ANALYSIS_METHODS, ARG_PREPARE_METHOD_FN
 
 
 @cli_subcommand
@@ -91,7 +91,7 @@ class CLI:
     no_edit = args[CLI.ARG_NO_EDIT]
     assert dst.is_dir()
 
-    method = args[ARG_PREPARE_METHOD](args, logger)
+    method = args[ARG_PREPARE_METHOD_FN](args, logger)
 
     if src.is_file():
       dir_files = list(dst.glob('*'))
