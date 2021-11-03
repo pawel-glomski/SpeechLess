@@ -68,9 +68,9 @@ class Editor:
     valid_streams = []
     for idx, ctx in ctx_map.items():
       if ctx.prepare_for_editing(changes):
-        valid_streams.append(ctx)
+        valid_streams.append(idx)
       source = restart_container(source, ctx_map)  # start from the beginning
-    valid_streams = [ctx.src_stream for ctx in ctx_map.values()]
+    valid_streams = [ctx_map[idx].src_stream for idx in valid_streams]
 
     # edit
     if len(valid_streams) > 0:
