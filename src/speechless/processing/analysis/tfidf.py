@@ -10,15 +10,15 @@ from typing import List
 from speechless.edit_context.common import TimelineChange
 from speechless.processing.analysis.analysis import (ARG_PREPARE_METHOD, AnalysisDomain,
                                                      AnalysisMethod, analysis_method_cli)
-from speechless.processing.tokenization import EditToken, sentence_segmentation
-from speechless.readers.subtitles import vtt_reader
+from speechless.processing.tokenization import EditToken, make_timeline_changes, sentence_segmentation
+from speechless.readers.subtitles import read_subtitles
 from speechless.utils.logging import NULL_LOGGER
 from speechless.utils.storage import make_cache_dir_rel
 
 GENSIM_CACHE_DIR = make_cache_dir_rel('gensim')
-CORPUS_DIR = str(GENSIM_CACHE_DIR/'gensim-data/')
-DICTIONARY_FILE = str(GENSIM_CACHE_DIR/'tfidf_dictionary.dic')
-MODEL_FILE = str(GENSIM_CACHE_DIR/'tfidf_model.model')
+CORPUS_DIR = str(GENSIM_CACHE_DIR / 'gensim-data/')
+DICTIONARY_FILE = str(GENSIM_CACHE_DIR / 'tfidf_dictionary.dic')
+MODEL_FILE = str(GENSIM_CACHE_DIR / 'tfidf_model.model')
 
 
 class TfidfAnalysis(AnalysisMethod):
@@ -44,12 +44,11 @@ class TfidfAnalysis(AnalysisMethod):
     if subtitles_path is None:
       raise NotImplementedError
     else:
-      sentences = sentence_segmentation(vtt_reader(subtitles_path))
+      sentences = sentence_segmentation(read_subtitles(subtitles_path))
     tokens = self.set_labels(sentences)
-    changes = [token.as_timeline_change(0.0) for token in tokens if token.label]
-    return changes
+    return make_timeline_changes(tokens)
 
-  def set_labels(self, sentences: List[List[EditToken]]) -> List[List[EditToken]]:
+  def set_labels(self, sentences: List[List[EditToken]]) -> List[EditToken]:
     for s in sentences:
       tokens = [word for token in s for word in token.text.split()]
       bow = self.data_dict.doc2bow(tokens, allow_update=True)
@@ -59,8 +58,8 @@ class TfidfAnalysis(AnalysisMethod):
         t.label = float(sentence_value < self.sentence_threshold)
     return [token for s in sentences for token in s]
 
-  def benchmark(self, transcript: List[EditToken]) -> List[float]:
-    sentences = sentence_segmentation(vtt_reader(transcript))
+  def score_transcription(self, transcript: List[EditToken]) -> List[float]:
+    sentences = sentence_segmentation(transcript)
     tokens = self.set_labels(sentences)
     changes = [token.label for token in tokens]
     return changes
@@ -88,9 +87,9 @@ class CLI:
     Returns:
         ArgumentParser: Configured parser
     """
-    parser.add_argument('-d',
+    parser.add_argument('-c',
                         f'--{CLI.ARG_CORPUS}',
-                        help='Corpus (TODO)',
+                        help='Corpus from gensim',
                         type=str,
                         action='store',
                         default=CLI.DEFAULT_ARGS[CLI.ARG_CORPUS])
