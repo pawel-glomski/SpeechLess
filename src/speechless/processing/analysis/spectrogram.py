@@ -76,22 +76,15 @@ class SpectrogramAnalysis(AnalysisMethod):
     # it generates one more for some reason
     y = librosa.power_to_db(
         librosa.feature.melspectrogram(sig, sr=SAMPLE_RATE, n_fft=N_FFT, hop_length=SEG_LEN).T)
-    y -= np.median(y)
+    y -= np.mean(y)
     y[y < 0] = 0
     y /= np.max(y)
-    y1 = (y[1:, :] - y[:-1, :])**2
-    y[:] = 0
-    y[:-1, :] = y1
-    y[1:, :] += y1
-    y[1:-1, :] /= 2
+    y[:-1, :] = (y[1:, :] - y[:-1, :])**2
+    y[-1, :] = y[-2, :]
     y = np.mean(y, axis=1)
     N = int(SAMPLE_RATE / SEG_LEN / 20)
-    n = y.shape[0]
-    y2 = y
-    for i in range(2 * N + 1):
-      if i != N:
-        y2[N:-N] += y[i:n - 2 * N + i] / (2 * N + 1)
-    return y2
+    y[N:-N] = np.convolve(y, np.ones(2 * N + 1), mode='valid') / (2 * N + 1)
+    return y
 
 
 ############################################### CLI ################################################
