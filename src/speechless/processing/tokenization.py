@@ -9,8 +9,11 @@ from speechless.edit_context import TimelineChange
 from speechless.utils.math import ranges_of_truth
 
 TOKEN_SEPARATOR = ' '
-SENTENCE_SEPARATOR = '.'
-SENTENCE_SEPARATOR_ALTERNATIVES = [',']
+SENTENCE_SEPARATOR = '.' + TOKEN_SEPARATOR
+SENTENCE_SEPARATOR_VALID_SET = {SENTENCE_SEPARATOR, '?' + TOKEN_SEPARATOR, '!' + TOKEN_SEPARATOR}
+SENTENCE_SEPARATOR_INVALID_SET = {',' + TOKEN_SEPARATOR}
+
+USELESS_TOKENS_SET = {'um', 'em', 'uh', 'er', 'hm', 'hmm'}
 
 SPACY_MODEL = 'en_core_web_md'
 
@@ -21,6 +24,7 @@ class EditToken:
   WHITESPACE_SUB_PATTERNS = re.compile(r'(^\s+)|'  # whitespaces at the beginning
                                        r'(\s+$)|'  # whitespaces at the end
                                        r'((?<=\s)\s+)')  # multiple whitespaces
+  WHITESPACE_PATTERN = re.compile(r'\s')
 
   def __init__(self, text: str, start_time: float, end_time: float):
     """Some part of the transcript, for which the timestamps are known. The text of the token is
@@ -33,14 +37,17 @@ class EditToken:
         start_time (float): The start time of the occurrence
         end_time (float): The end time of the occurrence
     """
-    self.text = self.TEXT_SUB_PATTERNS.sub('', text)
-    self.text = self.WHITESPACE_SUB_PATTERNS.sub('', self.text)
     self.start_time = start_time
     self.end_time = end_time
+    assert self.start_time < self.end_time
+
+    self.text = self.TEXT_SUB_PATTERNS.sub('', text)
+    self.text = self.WHITESPACE_SUB_PATTERNS.sub('', self.text)
+    self.text = self.WHITESPACE_PATTERN.sub(TOKEN_SEPARATOR, self.text)  # normalize whitespaces
+
     self.start_pos = None  # position in the document (character)
     self.index = None  # index of the token in the document
-    self.label = None
-    assert self.start_time < self.end_time
+    self.label = None  # label assigned later by an analysis method
 
   def as_timeline_change(self, duration_ratio: float) -> TimelineChange:
     return TimelineChange(self.start_time, self.end_time, duration_ratio)
@@ -49,20 +56,22 @@ class EditToken:
     return len(self.text)
 
 
-def spacy_nlp(text: str) -> spacy.tokens.Doc:
+def spacy_nlp(text: str, pipes: List[str]) -> spacy.tokens.Doc:
   """Runs spaCy on a provided text. This function uses a static instance of spaCy language, so it is
   initialized only once.
 
   Args:
       text (str): Text to process
+      pipes (List[str]): Which spaCy's pipes to use
 
   Returns:
       spacy.tokens.Doc: spaCy document generated from the text
   """
   if not hasattr(spacy_nlp, 'nlp'):  # lazy initialization of the spaCy Language
-    spacy_nlp.nlp = spacy.load(SPACY_MODEL,
-                               disable=['tagger', 'attribute_ruler', 'lemmatizer', 'ner'])
-  return spacy_nlp.nlp(text)
+    spacy_nlp.nlp = spacy.load(SPACY_MODEL)
+    spacy_nlp.nlp.Defaults.stop_words |= USELESS_TOKENS_SET | {'okay', 'right'}
+  with spacy_nlp.nlp.select_pipes(enable=pipes):
+    return spacy_nlp.nlp(text)
 
 
 def sentence_segmentation(transcript: List[EditToken]) -> List[List[EditToken]]:
@@ -88,7 +97,7 @@ def sentence_segmentation(transcript: List[EditToken]) -> List[List[EditToken]]:
   sentences: List[List[EditToken]] = []
 
   # 1. Segment using spaCy
-  doc = spacy_nlp(raw_transcript)
+  doc = spacy_nlp(raw_transcript, ['tok2vec', 'parser'])
   nlp_sents = list(doc.sents)
   assert nlp_sents[0].start_char == 0
 
@@ -126,26 +135,24 @@ def sentence_segmentation(transcript: List[EditToken]) -> List[List[EditToken]]:
     sent_idx += 1
 
   # 3. Add a sentence separator between sentences
-  pos_diff = 0
-  for sent, next_sent in zip(sentences[:-1], sentences[1:]):
-    if sent[-1].text[-len(SENTENCE_SEPARATOR):] != SENTENCE_SEPARATOR:
-      for alternative in SENTENCE_SEPARATOR_ALTERNATIVES:
-        alternative += TOKEN_SEPARATOR  # all tokens had TOKEN_SEPARATOR added at the end
-        if sent[-1].text.endswith(alternative):
-          sent[-1].text = sent[-1].text[:-len(alternative)] + SENTENCE_SEPARATOR
-          pos_diff += len(SENTENCE_SEPARATOR) - len(alternative)
+  for sent in sentences[:-1]:
+    sent_end = sent[-1].text
+    for valid_sep in SENTENCE_SEPARATOR_VALID_SET:
+      if sent_end.endswith(valid_sep):
+        break
+    else:
+      for invalid_sep in SENTENCE_SEPARATOR_INVALID_SET:
+        if sent_end.endswith(invalid_sep):
+          sent_end = sent_end[:-len(invalid_sep)] + SENTENCE_SEPARATOR
           break
-
-      if sent[-1].text.endswith(SENTENCE_SEPARATOR + TOKEN_SEPARATOR):
-        sent[-1].text = sent[-1].text[:-len(TOKEN_SEPARATOR)]
-        pos_diff -= len(TOKEN_SEPARATOR)
-      elif sent[-1].text.endswith(TOKEN_SEPARATOR):
-        sent[-1].text = sent[-1].text[:-len(TOKEN_SEPARATOR)] + SENTENCE_SEPARATOR
-        pos_diff += len(SENTENCE_SEPARATOR) - len(TOKEN_SEPARATOR)
       else:
-        assert sent[-1].text.endswith(SENTENCE_SEPARATOR)
-      for token in next_sent:
-        token.start_pos += pos_diff
+        sent_end = sent_end[:-len(TOKEN_SEPARATOR)] + SENTENCE_SEPARATOR
+      sent[-1].text = sent_end
+
+  # 4. Fix starting positions of tokens
+  tokens = [token for sentence in sentences for token in sentence]
+  for token, next_token in zip(tokens[:-1], tokens[1:]):
+    next_token.start_pos = token.start_pos + len(token)
 
   return sentences
 
@@ -162,7 +169,7 @@ def make_timeline_changes(tokens: List[EditToken],
       List[TimelineChanges]: List of changes, with intervals between words
       and before first and after last word
   """
-  rot = ranges_of_truth(np.array([token.label for token in tokens]))
+  rot = ranges_of_truth(np.array([not token.label for token in tokens]))
   changes = []
   for r in rot:
     start = tokens[r[0] - 1].end_time if r[0] > 0 else 0.0

@@ -104,7 +104,7 @@ class CLI:
       tl_changes = method.analyze(str(src), str(subs) if subs.is_file() else None)
       if cfg.is_file():
         with open(cfg, encoding='UTF-8') as cfg_file:
-          editor = Editor.from_json(json.load(cfg_file), logger)
+          editor, _ = Editor.from_json(json.load(cfg_file), logger)
       else:
         editor = Editor(logger=logger)
 
