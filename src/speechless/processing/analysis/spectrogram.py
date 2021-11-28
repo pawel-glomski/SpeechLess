@@ -16,31 +16,31 @@ N_FFT = 2048
 
 class SpectrogramAnalysis(AnalysisMethod):
 
-  def __init__(self, threshold: float, dur_multi: float, logger: Logger = NULL_LOGGER):
+  def __init__(self, th_ratio: float, dur_multi: float, logger: Logger = NULL_LOGGER):
     """Spectrogram based analysis method. This method looks at features of 2 adjacent timesteps and
     removes segments, for which the difference is small, thus reducing redundance in the signal.
     This method will remove silence and prolongations of sounds, syllables, words, or phrases.
 
     Args:
-        threshold (float): Threshold difference value, under which timesteps will be edited
-        dur_multi (float): Duration multiplier of timesteps selected for editing
+        th_ratio (float): Threshold ratio: greater value = more aggresive cuts
+        dur_multi (float): Duration multiplier of segments selected for removal
         logger (Logger, optional): Logger for messages. Defaults to NULL_LOGGER.
     """
     super().__init__('Spectrogram Analysis', [AnalysisDomain.AUDIO], logger)
-    self.threshold = threshold
+    self.th_ratio = th_ratio
     self.dur_multi = dur_multi
     self.logger = logger
 
   def analyze(self, recording_path: str, _) -> List[TimelineChange]:
     sig, stream_info = read_entire_audio(recording_path, logger=self.logger)
-    scored_segments = SpectrogramAnalysis.optimize_signal(sig[0], stream_info, self.threshold)
+    scored_segments = SpectrogramAnalysis.optimize_signal(sig[0], stream_info, self.th_ratio)
     segment_size = stream_info[StreamInfo.FRAME_SIZE] / stream_info[StreamInfo.SAMPLE_RATE]
     changes = ranges_of_truth(scored_segments != 1) * segment_size
     changes = np.concatenate([changes, np.ones((changes.shape[0], 1)) * self.dur_multi], axis=1)
     return TimelineChange.from_numpy(changes)
 
   @staticmethod
-  def optimize_signal(sig: np.ndarray, stream_info: Dict[StreamInfo, object], threshold: float) \
+  def optimize_signal(sig: np.ndarray, stream_info: Dict[StreamInfo, object], th_ratio: float) \
     -> np.ndarray:
     SEG_LEN = stream_info[StreamInfo.FRAME_SIZE]
 
@@ -49,7 +49,7 @@ class SpectrogramAnalysis(AnalysisMethod):
 
     sig = sig[:int(len(sig) / SEG_LEN) * SEG_LEN].reshape((-1, SEG_LEN))
     indicator = SpectrogramAnalysis.calc_indicator(sig.reshape(-1), stream_info)
-    labels = indicator >= ((np.median(indicator) + np.mean(indicator)) / 2 * (1 / threshold))
+    labels = indicator >= (th_ratio * (np.median(indicator) + np.mean(indicator)) / 2)
 
     ##################### Reduce aggresive cuts #####################
 
@@ -105,13 +105,13 @@ class CLI:
     Looks at spectrogram features of 2 adjacent timesteps and removes segments, for which the
     difference is small, thus reducing redundance in the signal. This method will remove silence and
     prolongations of sounds, syllables, words, or phrases.""".replace('\n', '')
-  ARG_THRESHOLD = 'threshold'
+  ARG_TH_RATIO = 'th_ratio'
   ARG_DUR_MULTI = 'dur_multi'
-  DEFAULT_ARGS = {ARG_THRESHOLD: 0.6667, ARG_DUR_MULTI: 0}
+  DEFAULT_ARGS = {ARG_TH_RATIO: 0.6667, ARG_DUR_MULTI: 0}
 
   @staticmethod
   def prepare_method(args, logger) -> 'SpectrogramAnalysis':
-    return SpectrogramAnalysis(args.get(CLI.ARG_THRESHOLD, CLI.DEFAULT_ARGS[CLI.ARG_THRESHOLD]),
+    return SpectrogramAnalysis(args.get(CLI.ARG_TH_RATIO, CLI.DEFAULT_ARGS[CLI.ARG_TH_RATIO]),
                                args.get(CLI.ARG_DUR_MULTI, CLI.DEFAULT_ARGS[CLI.ARG_DUR_MULTI]),
                                logger=logger)
 
@@ -122,12 +122,12 @@ class CLI:
     Returns:
         ArgumentParser: Configured parser
     """
-    parser.add_argument('-t',
-                        f'--{CLI.ARG_THRESHOLD}',
-                        help='Threshold value: greater value = less aggresive cuts',
+    parser.add_argument('-tr',
+                        f'--{CLI.ARG_TH_RATIO}',
+                        help='Threshold ratio: greater value = more aggresive cuts',
                         type=float,
                         action='store',
-                        default=CLI.DEFAULT_ARGS[CLI.ARG_THRESHOLD])
+                        default=CLI.DEFAULT_ARGS[CLI.ARG_TH_RATIO])
     parser.add_argument('-m',
                         f'--{CLI.ARG_DUR_MULTI}',
                         help='Duration multiplier of segments selected for removal',
