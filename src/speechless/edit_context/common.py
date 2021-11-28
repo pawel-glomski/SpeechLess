@@ -46,6 +46,25 @@ class TimelineChange:
     self._multi = Real(value) if value is not None else None
 
   @staticmethod
+  def check_changes_list(changes: List['TimelineChange']) -> None:
+    """Checks whether list of timeline changes is valid
+
+    Args:
+        changes (List[TimelineChange]): List of timeline changes
+
+    Raises:
+        ValueError: When changes are not sorted properly or one of them has a range of length <= 0
+    """
+    assert isinstance(changes, list)
+    if len(changes) > 0:
+      for r1, r2 in zip(changes[:-1], changes[1:]):
+        if not (0 <= r1.beg < r1.end <= r2.beg):
+          raise ValueError('Changes must be sorted, mutually exclusive, and with ranges of length '
+                           'greater than zero')
+      if not (0 <= changes[-1].beg < changes[-1].end):
+        raise ValueError('Change range must be of length greater than 0')
+
+  @staticmethod
   def from_numpy(arr: np.ndarray) -> List['TimelineChange']:
     """Creates a list of timeline changes from a numpy ndarray
 
@@ -54,21 +73,41 @@ class TimelineChange:
         and the second is a change in the form of a 3-element array:
         [start time, end time, duration multiplier]. The times are in seconds
 
-    Raises:
-        ValueError: When changes are not sorted properly or one of them has a range of length <= 0
-
     Returns:
         List[TimelineChange]: List of timeline changes
     """
     changes = [TimelineChange(*r) for r in arr]
-    if len(changes) > 0:
-      for r1, r2 in zip(changes[:-1], changes[1:]):
-        if not (0 <= r1.beg < r1.end <= r2.beg):
-          raise ValueError('Changes must be sorted, mutually exclusive, and with ranges of length '
-                           'greater than zero')
-      if not (0 <= changes[-1].beg < changes[-1].end):
-        raise ValueError('Change range must be of length greater than 0')
+    TimelineChange.check_changes_list(changes)
     return changes
+
+  @staticmethod
+  def combine_changes(primary: List['TimelineChange'],
+                      supplement: List['TimelineChange']) -> List['TimelineChange']:
+    """Combines two lists of timeline changes, where the changes in `supplement` will be only
+    applied to the fragments untouched by the changes of `primary`.
+
+    Returns:
+        [List[TimelineChange]]: Combined list of changes
+    """
+    result = []
+    supp_idx = 0
+    for prim in primary:
+      while supp_idx < len(supplement) and supplement[supp_idx].beg < prim.beg:
+        supp = supplement[supp_idx]
+        result.append(TimelineChange(supp.beg, min(supp.end, prim.beg), supp.multi))
+        if supp.end <= prim.end:
+          supp_idx += 1
+        else:
+          supp.beg = prim.end
+      while supp_idx < len(supplement) and supplement[supp_idx].end <= prim.end:
+        supp_idx += 1
+      if (supp_idx < len(supplement) and
+          prim.beg <= supplement[supp_idx].beg < prim.end < supplement[supp_idx].end):
+        supplement[supp_idx].beg = prim.end
+      result.append(prim)
+    result += supplement[supp_idx:] if supp_idx < len(supplement) else []
+    TimelineChange.check_changes_list(result)
+    return result
 
 
 class EditCtx:

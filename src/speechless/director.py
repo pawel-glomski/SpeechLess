@@ -4,8 +4,9 @@ from logging import Logger
 from pathlib import Path
 from argparse import ArgumentParser
 
-from speechless.editor import Editor
-
+from .editor import Editor
+from .edit_context import TimelineChange
+from .utils.config import CfgID
 from .utils.cli import cli_subcommand, FORMATTER_CLASS
 from .processing.analysis import ANALYSIS_METHODS, ARG_PREPARE_METHOD_FN
 
@@ -66,7 +67,7 @@ class CLI:
 
     analysis_methods = parser.add_subparsers(title='Analysis methods',
                                              dest=CLI.ARG_METHOD,
-                                             required=True)
+                                             required=False)
     for method in ANALYSIS_METHODS:
       method.setup_arg_parser(
           analysis_methods.add_parser(method.COMMAND,
@@ -91,8 +92,6 @@ class CLI:
     no_edit = args[CLI.ARG_NO_EDIT]
     assert dst.is_dir()
 
-    method = args[ARG_PREPARE_METHOD_FN](args, logger)
-
     if src.is_file():
       dir_files = list(dst.glob('*'))
       dst_path = dst / src.name
@@ -101,12 +100,36 @@ class CLI:
         dst_path = dst / (src.stem + f' ({idx})' + src.suffix)
         idx += 1
 
-      tl_changes = method.analyze(str(src), str(subs) if subs.is_file() else None)
+      methods = []
       if cfg.is_file():
         with open(cfg, encoding='UTF-8') as cfg_file:
-          editor, _ = Editor.from_json(json.load(cfg_file), logger)
+          cfg_dict = json.load(cfg_file)
+        editor, _ = Editor.from_json(cfg_dict, logger)
+        for method_idx, method_dict in enumerate(cfg_dict.get(CfgID.METHODS, [])):
+          if len(method_dict) != 1:
+            logger.warning(f'Bad {method_idx+1}. method structure, skipping')
+            continue
+
+          method_name, method_cfg_dict = list(method_dict.items())[0]
+          for method in ANALYSIS_METHODS:
+            if method.COMMAND == method_name:
+              methods.append((method.prepare_method, method_cfg_dict))
+              break
+          else:
+            logger.warning(f'Unrecognised analysis method: {method_name}')
+
       else:
         editor = Editor(logger=logger)
+
+      if ARG_PREPARE_METHOD_FN in args:
+        if len(methods) > 0:
+          logger.warning('Analysis methods specified in the config file will be ignored')
+        methods = [(args[ARG_PREPARE_METHOD_FN], args)]
+      tl_changes = []
+      for method_prepare_fn, method_cfg_dict in methods:
+        method = method_prepare_fn(method_cfg_dict, logger=logger)
+        new_tl_changes = method.analyze(str(src), str(subs) if subs.is_file() else None)
+        tl_changes = TimelineChange.combine_changes(tl_changes, new_tl_changes)
 
       if no_edit:
         editor.export_json(dst / (dst_path.stem + '.json'), tl_changes)
@@ -114,7 +137,5 @@ class CLI:
         editor.edit(str(src), tl_changes, str(dst_path))
     elif src.is_dir():
       raise NotImplementedError()
-
-    for file_path in Path(src).glob('*'):
-      if not file_path.is_file():
-        continue
+    else:
+      raise FileNotFoundError()

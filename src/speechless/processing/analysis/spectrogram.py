@@ -36,7 +36,8 @@ class SpectrogramAnalysis(AnalysisMethod):
     scored_segments = SpectrogramAnalysis.optimize_signal(sig[0], stream_info, self.threshold)
     segment_size = stream_info[StreamInfo.FRAME_SIZE] / stream_info[StreamInfo.SAMPLE_RATE]
     changes = ranges_of_truth(scored_segments != 1) * segment_size
-    return np.concatenate([changes, np.ones((changes.shape[0], 1)) * self.dur_multi], axis=1)
+    changes = np.concatenate([changes, np.ones((changes.shape[0], 1)) * self.dur_multi], axis=1)
+    return TimelineChange.from_numpy(changes)
 
   @staticmethod
   def optimize_signal(sig: np.ndarray, stream_info: Dict[StreamInfo, object], threshold: float) \
@@ -106,12 +107,13 @@ class CLI:
     prolongations of sounds, syllables, words, or phrases.""".replace('\n', '')
   ARG_THRESHOLD = 'threshold'
   ARG_DUR_MULTI = 'dur_multi'
-  ARG_PAD = 'padding'
-  DEFAULT_ARGS = {ARG_THRESHOLD: 1.5, ARG_DUR_MULTI: 0, ARG_PAD: 0}
+  DEFAULT_ARGS = {ARG_THRESHOLD: 0.6667, ARG_DUR_MULTI: 0}
 
   @staticmethod
   def prepare_method(args, logger) -> 'SpectrogramAnalysis':
-    return SpectrogramAnalysis(args[CLI.ARG_THRESHOLD], args[CLI.ARG_DUR_MULTI], logger=logger)
+    return SpectrogramAnalysis(args.get(CLI.ARG_THRESHOLD, CLI.DEFAULT_ARGS[CLI.ARG_THRESHOLD]),
+                               args.get(CLI.ARG_DUR_MULTI, CLI.DEFAULT_ARGS[CLI.ARG_DUR_MULTI]),
+                               logger=logger)
 
   @staticmethod
   def setup_arg_parser(parser: ArgumentParser) -> ArgumentParser:
@@ -132,10 +134,4 @@ class CLI:
                         type=float,
                         action='store',
                         default=CLI.DEFAULT_ARGS[CLI.ARG_DUR_MULTI])
-    parser.add_argument('-p',
-                        f'--{CLI.ARG_PAD}',
-                        help='Padding in seconds at the edges of removed segments',
-                        type=float,
-                        action='store',
-                        default=CLI.DEFAULT_ARGS[CLI.ARG_PAD])
     parser.set_defaults(**{ARG_PREPARE_METHOD_FN: CLI.prepare_method})
