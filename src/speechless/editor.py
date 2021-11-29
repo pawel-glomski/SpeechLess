@@ -10,21 +10,11 @@ from argparse import ArgumentParser
 
 from .utils.cli import cli_subcommand
 from .utils.logging import NULL_LOGGER
+from .utils.config import CfgID
 from .edit_context import TimelineChange, EditCtx, VideoEditContext, AudioEditContext
 from .edit_context.common import restart_container
 
-ID_VIDEO_STREAM = 'video'  # compatible with PyAV
-ID_AUDIO_STREAM = 'audio'  # compatible with PyAV
-SUPPORTED_STREAM_TYPES = [ID_VIDEO_STREAM, ID_AUDIO_STREAM]
-
-ID_CODEC = 'codec'
-ID_CODEC_OPTIONS = 'codec-options'
-ID_BITRATE = 'bitrate'
-ID_RESOLUTION = 'resolution'
-ID_MAX_FPS = 'max-fps'
-ID_SAMPLE_RATE = 'sample-rate'
-ID_MONO = 'mono'
-ID_TIMELINE_CHANGES = 'timeline-changes'
+SUPPORTED_STREAM_TYPES = [CfgID.VIDEO_STREAM, CfgID.AUDIO_STREAM]
 
 
 class Editor:
@@ -42,8 +32,8 @@ class Editor:
     """
     self.logger = logger
     self.settings = {}
-    self.settings[ID_VIDEO_STREAM] = {} if video_settings is None else video_settings
-    self.settings[ID_AUDIO_STREAM] = {} if audio_settings is None else audio_settings
+    self.settings[CfgID.VIDEO_STREAM] = {} if video_settings is None else video_settings
+    self.settings[CfgID.AUDIO_STREAM] = {} if audio_settings is None else audio_settings
 
   def edit(self, src_path: str, changes: Union[List[TimelineChange], np.ndarray], dst_path: str) \
     -> None:
@@ -128,12 +118,12 @@ class Editor:
       settings = self.settings.get(src_stream.type, {}).copy()
       settings.update(self.settings.get(src_stream.index, {}))
 
-      if src_stream.type == ID_VIDEO_STREAM:
-        codec = settings.get(ID_CODEC, src_stream.codec_context.name)
-        codec_options = settings.get(ID_CODEC_OPTIONS, src_stream.codec_context.options)
-        bitrate = settings.get(ID_BITRATE, src_stream.bit_rate)
-        resolution = settings.get(ID_RESOLUTION, [src_stream.width, src_stream.height])
-        max_fps = Fraction(settings.get(ID_MAX_FPS, src_stream.guessed_rate))
+      if src_stream.type == CfgID.VIDEO_STREAM:
+        codec = settings.get(CfgID.CODEC, src_stream.codec_context.name)
+        codec_options = settings.get(CfgID.CODEC_OPTIONS, src_stream.codec_context.options)
+        bitrate = settings.get(CfgID.BITRATE, src_stream.bit_rate)
+        resolution = settings.get(CfgID.RESOLUTION, [src_stream.width, src_stream.height])
+        max_fps = Fraction(settings.get(CfgID.MAX_FPS, src_stream.guessed_rate))
 
         dst_stream = dst.add_stream(codec_name=codec, options=codec_options)
         dst_stream.codec_context.time_base = Fraction(1, 60000)
@@ -147,12 +137,12 @@ class Editor:
         dst_stream.width, dst_stream.height = resolution
         ctx_map[src_stream.index] = VideoEditContext(src_stream, dst_stream, max_fps)
 
-      elif src_stream.type == ID_AUDIO_STREAM:
-        codec = settings.get(ID_CODEC, src_stream.codec_context.name)
-        codec_options = settings.get(ID_CODEC_OPTIONS, src_stream.codec_context.options)
-        bitrate = settings.get(ID_BITRATE, src_stream.bit_rate)
-        sample_rate = settings.get(ID_SAMPLE_RATE, src_stream.sample_rate)
-        channels = 1 if settings.get(ID_MONO, False) else src_stream.channels
+      elif src_stream.type == CfgID.AUDIO_STREAM:
+        codec = settings.get(CfgID.CODEC, src_stream.codec_context.name)
+        codec_options = settings.get(CfgID.CODEC_OPTIONS, src_stream.codec_context.options)
+        bitrate = settings.get(CfgID.BITRATE, src_stream.bit_rate)
+        sample_rate = settings.get(CfgID.SAMPLE_RATE, src_stream.sample_rate)
+        channels = 1 if settings.get(CfgID.MONO, False) else src_stream.channels
 
         dst_stream = dst.add_stream(codec_name=codec, rate=sample_rate)
         dst_stream.options = codec_options
@@ -187,14 +177,14 @@ class Editor:
         changes (Union[List[TimelineChange], np.ndarray]): Timeline changes - a list of
         TimelineChange instances or a numpy array of shape (N, 3), where N is the number of changes
     """
-    assert ID_TIMELINE_CHANGES not in self.settings
+    assert CfgID.TIMELINE_CHANGES not in self.settings
 
     with open(path, 'w', encoding='UTF-8') as fp:
       config = self.settings.copy()
       if isinstance(changes, np.ndarray):
-        config[ID_TIMELINE_CHANGES] = changes.tolist()
+        config[CfgID.TIMELINE_CHANGES] = changes.tolist()
       elif changes is not None:
-        config[ID_TIMELINE_CHANGES] = [[r.beg, r.end, r.multi] for r in changes]
+        config[CfgID.TIMELINE_CHANGES] = [[r.beg, r.end, r.multi] for r in changes]
       json.dump(config, fp)
 
   @staticmethod
@@ -210,43 +200,42 @@ class Editor:
     changes = []
     for identifier, config in json_settings.items():
       identifier = identifier.lower()
-
-      if identifier in [ID_VIDEO_STREAM, ID_AUDIO_STREAM]:
+      if identifier in [CfgID.VIDEO_STREAM, CfgID.AUDIO_STREAM]:
         settings = editor.settings.setdefault(identifier, {})  # stream type
       elif identifier.isnumeric():
         settings = editor.settings.setdefault(int(identifier), {})  # stream idx
-      elif identifier == ID_TIMELINE_CHANGES:
-        for tl_change in config:
-          changes.append(np.array(tl_change).reshape((1, -1)))
-        continue
       else:
-        logger.warning(f'Skipping unrecognized identifier: {identifier}')
+        if identifier == CfgID.TIMELINE_CHANGES:
+          for tl_change in config:
+            changes.append(np.array(tl_change).reshape((1, -1)))
+        elif not CfgID.has_value(identifier):
+          logger.warning(f'Skipping unrecognized identifier: {identifier}')
         continue
 
       for key, value in config.items():
-        if key == ID_CODEC:
+        if key == CfgID.CODEC:
           settings[key] = str(value)
-        elif key == ID_CODEC_OPTIONS:
+        elif key == CfgID.CODEC_OPTIONS:
           settings[key] = value
           for option_key, option_value in value.items():
             value[option_key] = str(option_value)
-        elif key == ID_BITRATE:
+        elif key == CfgID.BITRATE:
           settings[key] = int(value)  # bitrate in b/s
           if settings[key] <= 0:
-            raise ValueError(f'"{ID_BITRATE}" must be a positive number')
-        elif key == ID_RESOLUTION:
+            raise ValueError(f'"{CfgID.BITRATE}" must be a positive number')
+        elif key == CfgID.RESOLUTION:
           settings[key] = [int(dim) for dim in value]  # [width, height]
           if settings[key][0] * settings[key][1] <= 0:
-            raise ValueError(f'"{ID_RESOLUTION}" must consist of positive numbers')
-        elif key == ID_MAX_FPS:
+            raise ValueError(f'"{CfgID.RESOLUTION}" must consist of positive numbers')
+        elif key == CfgID.MAX_FPS:
           settings[key] = float(value)
           if settings[key] <= 0:
-            raise ValueError(f'"{ID_MAX_FPS}" must be a positive number')
-        elif key == ID_SAMPLE_RATE:
+            raise ValueError(f'"{CfgID.MAX_FPS}" must be a positive number')
+        elif key == CfgID.SAMPLE_RATE:
           settings[key] = int(value)
           if settings[key] <= 0:
-            raise ValueError(f'"{ID_SAMPLE_RATE}" must be a positive number')
-        elif key == ID_MONO:
+            raise ValueError(f'"{CfgID.SAMPLE_RATE}" must be a positive number')
+        elif key == CfgID.MONO:
           settings[key] = bool(value)
         else:
           logger.warning(f'Skipping unrecognized setting: {key}:')
@@ -298,6 +287,6 @@ class CLI:
     with open('test.json', 'r', encoding='UTF-8') as fp:
       json_cfg = json.load(fp)
     editor = Editor.from_json(json_cfg, logger=logger)
-    changes = np.array(json_cfg[ID_TIMELINE_CHANGES])
+    changes = np.array(json_cfg[CfgID.TIMELINE_CHANGES])
     # editor.export_json(changes, 'test2.json')
     editor.edit(args[CLI.ARG_SRC], changes, args[CLI.ARG_DST])

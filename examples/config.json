@@ -1,21 +1,39 @@
 {
-    "video": {
-        "codec": "h264",
-        "codec-options": {
-            "crf": "10",
-            "profile": "high"
-        },
-        "resolution": [ 256, 144 ],
-        "max-fps": 120
+  "video": {
+    "codec": "h264",
+    "codec-options": {
+      "crf": "10",
+      "profile": "high"
     },
-    "1": {
-        "resolution": [ 256, 144 ],
-        "max-fps": 15
+    "resolution": [ 256, 144 ],
+    "max-fps": 120
+  },
+  "1": {
+    "resolution": [ 256, 144 ],
+    "max-fps": 15
+  },
+  "audio": {
+    "codec": "aac",
+    "bitrate": 188000,
+    "sample-rate": 44100,
+    "mono": true
+  },
+  "timeline-changes": [
+    [ 0, 370, 0 ],
+    [ 390, Infinity, 0 ]
+  ],
+  "methods": [
+    {
+      "tfidf": {
+        "sent_th_ratio": 2,
+        "remove_sw": true,
+        "lemmatize": true
+      }
     },
-    "audio": {
-        "codec": "aac",
-        "bitrate": 188000,
-        "sample-rate": 44100,
-        "mono": true
+    {
+      "spectrogram": {
+        "threshold": 0.6667
+      }
     }
+  ]
 }

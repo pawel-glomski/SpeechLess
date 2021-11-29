@@ -124,10 +124,10 @@ class CLI:
 
   @staticmethod
   def prepare_method(args, logger: Logger) -> 'TfidfAnalysis':
-    return TfidfAnalysis(args[CLI.ARG_CORPUS],
-                         args[CLI.ARG_SENT_TH_RATIO],
-                         args[CLI.ARG_REMOVE_SW],
-                         args[CLI.ARG_LEMMATIZE],
+    return TfidfAnalysis(args.get(CLI.ARG_CORPUS, CLI.DEFAULT_ARGS[CLI.ARG_CORPUS]),
+                         args.get(CLI.ARG_SENT_TH_RATIO, CLI.DEFAULT_ARGS[CLI.ARG_SENT_TH_RATIO]),
+                         args.get(CLI.ARG_REMOVE_SW, CLI.DEFAULT_ARGS[CLI.ARG_REMOVE_SW]),
+                         args.get(CLI.ARG_LEMMATIZE, CLI.DEFAULT_ARGS[CLI.ARG_LEMMATIZE]),
                          logger=logger)
 
   @staticmethod
