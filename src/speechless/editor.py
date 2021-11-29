@@ -200,10 +200,6 @@ class Editor:
     changes = []
     for identifier, config in json_settings.items():
       identifier = identifier.lower()
-      if not CfgID.has_value(identifier):
-        logger.warning(f'Skipping unrecognized identifier: {identifier}')
-        continue
-
       if identifier in [CfgID.VIDEO_STREAM, CfgID.AUDIO_STREAM]:
         settings = editor.settings.setdefault(identifier, {})  # stream type
       elif identifier.isnumeric():
@@ -212,6 +208,8 @@ class Editor:
         if identifier == CfgID.TIMELINE_CHANGES:
           for tl_change in config:
             changes.append(np.array(tl_change).reshape((1, -1)))
+        elif not CfgID.has_value(identifier):
+          logger.warning(f'Skipping unrecognized identifier: {identifier}')
         continue
 
       for key, value in config.items():
