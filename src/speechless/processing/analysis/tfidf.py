@@ -14,6 +14,8 @@ from speechless.processing.analysis.analysis import (ARG_PREPARE_METHOD_FN, Anal
 from speechless.processing.tokenization import (EditToken, make_timeline_changes,
                                                 sentence_segmentation, spacy_nlp)
 from speechless.readers.subtitles import read_subtitles
+from speechless.readers import read_entire_audio
+from speechless.transcription import speech_to_text
 from speechless.utils.logging import NULL_LOGGER
 from speechless.utils.storage import make_cache_dir_rel
 
@@ -52,8 +54,14 @@ class TfidfAnalysis(AnalysisMethod):
 
   def analyze(self, recording_path: str, subtitles_path: str) -> List[TimelineChange]:
     if subtitles_path is None:
-      raise NotImplementedError
-    sentences = sentence_segmentation(read_subtitles(subtitles_path))
+      audio, _ = read_entire_audio(recording_path,
+                                   aud_format='s16le',
+                                   sample_rate=16000,
+                                   logger=self.logger)
+      transcript = speech_to_text(audio[0] if len(audio.shape) > 1 else audio)
+    else:
+      transcript = read_subtitles(subtitles_path)
+    sentences = sentence_segmentation(transcript)
     tokens = self.set_labels(sentences)
     return make_timeline_changes(tokens)
 
