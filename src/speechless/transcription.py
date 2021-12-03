@@ -1,22 +1,40 @@
-from pathlib import Path
 import deepspeech
 import numpy
+import os
+import wget
 
-MODEL_PATH = (Path.cwd() / ('../models' if Path.cwd().name == 'src' else 'models') /
-              'deepspeech-0.9.3-models.pbmm').resolve()
-SCORER_PATH = (Path.cwd() / ('../models' if Path.cwd().name == 'src' else 'models') /
-               'deepspeech-0.9.3-models.scorer').resolve()
+from typing import List
+
+from speechless.utils.storage import make_cache_dir_rel
+from speechless.processing.tokenization import EditToken
+
+SCORER_URL = 'https://github.com/mozilla/DeepSpeech/releases/download/v0.9.3/deepspeech-0.9.3-models.scorer'
+MODEL_URL = 'https://github.com/mozilla/DeepSpeech/releases/download/v0.9.3/deepspeech-0.9.3-models.pbmm'
+
+DEEPSPEECH_CACHE_DIR = make_cache_dir_rel('deepspeech')
+SCORER_FILE = str(DEEPSPEECH_CACHE_DIR / os.path.basename(SCORER_URL))
+MODEL_FILE = str(DEEPSPEECH_CACHE_DIR / os.path.basename(MODEL_URL))
+
+
+def get_deepspeech_resources():
+  for file, url in [(SCORER_FILE, SCORER_URL), (MODEL_FILE, MODEL_URL)]:
+    if not os.path.exists(file):
+      wget.download(url, file)
 
 
 def transcript_count_words(transcript: deepspeech.CandidateTranscript) -> dict:
-  """Count occurrences of individual words in :class:`deepspeech.CandidateTranscript`
-    This function counts occurrences of each separate words. It returns
-    a dictionary, in wich keys correspond to words and values
-    to the number of occurrences.
-    :param deepspeech.CandidateTranscript transcript: Transcript for the counting.
-    :return: A dictionary, containing numbers of occurrences.
-    :rtype: :class:`dict`
-    """
+  """Count occurrences of individual words in transcript
+
+  This function counts occurrences of each separate words. It returns
+  a dictionary, in wich keys correspond to words and values
+  to the number of occurrences.
+
+  Args:
+      transcript (deepspeech.CandidateTranscript): Transcript for the counting.
+
+  Returns:
+      dict: A dictionary, containing numbers of occurrences.
+  """
   tokens = transcript.tokens
   words = dict()
   for token in tokens:
@@ -32,10 +50,13 @@ def transcript_count_words(transcript: deepspeech.CandidateTranscript) -> dict:
 
 def transcript_to_string(transcript: deepspeech.CandidateTranscript) -> str:
   """Convert transcript to string
-    :param deepspeech.CandidateTranscript transcript: Transcript to convert.
-    :return: Concatenated text from all the tokens from the transcript.
-    :rtype: :class:`str`
-    """
+
+  Args:
+      transcript (deepspeech.CandidateTranscript): Transcript to convert.
+
+  Returns:
+      str: Concatenated text from all the tokens from the transcript.
+  """
   tokens = transcript.tokens
   s = ''
   for token in tokens:
@@ -45,13 +66,17 @@ def transcript_to_string(transcript: deepspeech.CandidateTranscript) -> str:
 
 def string_count_words(string: str) -> dict:
   """Count occurrences of individual words in a given string
-    This function counts occurrences of each separate words. It returns
-    a dictionary, in wich keys correspond to words and values
-    to the number of occurrences.
-    :param str string: String for the counting.
-    :return: A dictionary, containing numbers of occurrences.
-    :rtype: :class:`dict`
-    """
+
+  This function counts occurrences of each separate words. It returns
+  a dictionary, in wich keys correspond to words and values
+  to the number of occurrences.
+
+  Args:
+      string (str): String for the counting.
+
+  Returns:
+      dict: A dictionary, containing numbers of occurrences.
+  """
   word_list = string.split()
   words = {}
   for word in word_list:
@@ -63,35 +88,72 @@ def string_count_words(string: str) -> dict:
   return words
 
 
-def speech_to_text(audio: numpy.array) -> deepspeech.CandidateTranscript:
-  """ Perform a speech to text transcription
-    :param numpy.array audio: A 16-bit, mono raw audio signal.
-    :return: A transcript object containing recognized words and their timestamps.
-    :rtype: :class:`deepspeech.CandidateTranscript`
-    """
-  model = deepspeech.Model(str(MODEL_PATH))
-  model.enableExternalScorer(str(SCORER_PATH))
-  return model.sttWithMetadata(audio).transcripts[0]
+def transcript_to_edit_tokens(transcript: deepspeech.CandidateTranscript) -> List[EditToken]:
+  """Create a list of EditTokens from transcript
+
+  Args:
+      transcript (transcript: deepspeech.CandidateTranscript): Transcript to convert.
+
+  Returns:
+      List[EditToken]: List with tokens
+  """
+  tokens = []
+  start_i = -1
+  for i, token in enumerate(transcript.tokens[:-1]):
+    if start_i == -1:
+      start_i = i
+    if token.text == ' ' and start_i != i:
+      tokens.append(
+          EditToken(''.join([t.text for t in transcript.tokens[start_i:i]]),
+                    transcript.tokens[start_i].start_time, token.start_time))
+      start_i = -1
+  tokens.append(
+      EditToken(
+          ''.join([t.text for t in transcript.tokens[start_i:]]),
+          transcript.tokens[start_i].start_time, transcript.tokens[-1].start_time +
+          (transcript.tokens[-1].start_time - transcript.tokens[-2].start_time)))
+  return tokens
+
+
+def speech_to_text(audio: numpy.array) -> List[EditToken]:
+  """Perform a speech to text transcription
+
+  Args:
+      audio (numpy.array): A 16-bit, mono raw audio signal.
+
+  Returns:
+      List[EditToken]: A transcript containing recognized words and their timestamps.
+  """
+  get_deepspeech_resources()
+  model = deepspeech.Model(MODEL_FILE)
+  model.enableExternalScorer(SCORER_FILE)
+  return transcript_to_edit_tokens(model.sttWithMetadata(audio).transcripts[0])
 
 
 def remove_characters(s: str, characters: str) -> str:
-  """ Remove given characters from string
-    :param str s: String to remove characters from.
-    :param str chracters: Character set containing characters to remove.
-    :return: Copy of a given string, with specified characters removed.
-    :rtype: :class:`str`
-    """
+  """Remove given characters from string
+
+  Args:
+      s (str): String to remove characters from.
+      chracters (str): Character set containing characters to remove.
+
+  Returns:
+      str: Copy of a given string, with specified characters removed.
+  """
   for c in characters:
     s = s.replace(c, '')
   return s
 
 
 def load_and_adjust_script(file: str) -> str:
-  """ Load text from file and adjust it for comparison with transcript
-    :param str file: Path to file.
-    :return: Adjusted text.
-    :rtype: :class:`str`
-    """
+  """Load text from file and adjust it for comparison with transcript
+
+  Args:
+      file (str): Path to file.
+
+  Returns:
+      str: Adjusted text.
+  """
   content = ''
   with open(file, encoding='UTF-8') as f:
     content = f.read()
@@ -103,12 +165,15 @@ def load_and_adjust_script(file: str) -> str:
 
 
 def test(transcript: deepspeech.CandidateTranscript, compare_to: str) -> float:
-  """ Test transcription accuracy by comparing it with another text
-    :param deepspeech.CandidateTranscript transcipt: Transcript to test.
-    :param str compare_to: Path to text file to use for comparison.
-    :return: Value from range <0, 1>, where 1 represents complete similarity.
-    :rtype: :class:`float`
-    """
+  """Test transcription accuracy by comparing it with another text
+
+  Args:
+      transcipt (deepspeech.CandidateTranscript): Transcript to test.
+      compare_to (str): Path to text file to use for comparison.
+
+  Returns:
+      float: Value from range <0, 1>, where 1 represents complete similarity.
+  """
   # dictionary1 = transcript_count_words(transcript)
   text = transcript_to_string(transcript)
   dictionary1 = string_count_words(text)
