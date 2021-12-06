@@ -11,7 +11,10 @@ from speechless.utils.logging import NULL_LOGGER
 from speechless.utils.math import ranges_of_truth
 from speechless.edit_context import TimelineChange
 
-N_FFT = 2048
+SAMPLE_RATE = 16000
+N_FFT = 1024
+HOP_LENGTH = 256
+CONV_N = int(SAMPLE_RATE / HOP_LENGTH / 20)
 
 
 class SpectrogramAnalysis(AnalysisMethod):
@@ -32,23 +35,20 @@ class SpectrogramAnalysis(AnalysisMethod):
     self.logger = logger
 
   def analyze(self, recording_path: str, _) -> List[TimelineChange]:
-    sig, stream_info = read_entire_audio(recording_path, logger=self.logger)
-    scored_segments = SpectrogramAnalysis.optimize_signal(sig[0], stream_info, self.th_ratio)
-    segment_size = stream_info[StreamInfo.FRAME_SIZE] / stream_info[StreamInfo.SAMPLE_RATE]
-    changes = ranges_of_truth(scored_segments != 1) * segment_size
+    sig, _ = read_entire_audio(recording_path, sample_rate=SAMPLE_RATE, logger=self.logger)
+    scored_segments = SpectrogramAnalysis.optimize_signal(sig[0], self.th_ratio)
+    segment_time = HOP_LENGTH / SAMPLE_RATE
+    changes = ranges_of_truth(scored_segments != 1) * segment_time
     changes = np.concatenate([changes, np.ones((changes.shape[0], 1)) * self.dur_multi], axis=1)
     return TimelineChange.from_numpy(changes)
 
   @staticmethod
-  def optimize_signal(sig: np.ndarray, stream_info: Dict[StreamInfo, object], th_ratio: float) \
-    -> np.ndarray:
-    SEG_LEN = stream_info[StreamInfo.FRAME_SIZE]
+  def optimize_signal(sig: np.ndarray, th_ratio: float) -> np.ndarray:
+    min_true_seq = 12
+    min_false_seq = 6
 
-    min_true_seq = 6
-    min_false_seq = 4
-
-    sig = sig[:int(len(sig) / SEG_LEN) * SEG_LEN].reshape((-1, SEG_LEN))
-    indicator = SpectrogramAnalysis.calc_indicator(sig.reshape(-1), stream_info)
+    sig = sig[:int(len(sig) / HOP_LENGTH) * HOP_LENGTH].reshape((-1, HOP_LENGTH))
+    indicator = SpectrogramAnalysis.calc_indicator(sig.reshape(-1))
     labels = indicator >= (th_ratio * (np.median(indicator) + np.mean(indicator)) / 2)
 
     ##################### Reduce aggresive cuts #####################
@@ -70,21 +70,17 @@ class SpectrogramAnalysis(AnalysisMethod):
     return labels
 
   @staticmethod
-  def calc_indicator(sig: np.ndarray, stream_info: Dict[StreamInfo, object]) -> np.ndarray:
-    SEG_LEN = stream_info[StreamInfo.FRAME_SIZE]
-    SAMPLE_RATE = stream_info[StreamInfo.SAMPLE_RATE]
-
-    # it generates one more for some reason
+  def calc_indicator(sig: np.ndarray) -> np.ndarray:
     y = librosa.power_to_db(
-        librosa.feature.melspectrogram(sig, sr=SAMPLE_RATE, n_fft=N_FFT, hop_length=SEG_LEN).T)
+        librosa.feature.melspectrogram(sig, sr=SAMPLE_RATE, n_fft=N_FFT, hop_length=HOP_LENGTH).T)
     y -= np.mean(y)
     y[y < 0] = 0
     y /= np.max(y)
     y[:-1, :] = (y[1:, :] - y[:-1, :])**2
     y[-1, :] = y[-2, :]
     y = np.mean(y, axis=1)
-    N = int(SAMPLE_RATE / SEG_LEN / 20)
-    y[N:-N] = np.convolve(y, np.ones(2 * N + 1), mode='valid') / (2 * N + 1)
+
+    y[CONV_N:-CONV_N] = np.convolve(y, np.ones(2 * CONV_N + 1), mode='valid') / (2 * CONV_N + 1)
     return y
 
 
