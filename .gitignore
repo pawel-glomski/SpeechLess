@@ -2,5 +2,6 @@
 *.egg-info/
 data/*
 !data/*.txt
+!data/*.py
 
 __pycache__
