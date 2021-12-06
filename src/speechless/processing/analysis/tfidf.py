@@ -104,7 +104,7 @@ class TfidfAnalysis(AnalysisMethod):
 
     return [token for s in sentences for token in s]
 
-  def score_transcription(self, transcript: List[EditToken]) -> List[float]:
+  def score_transcript(self, transcript: List[EditToken]) -> List[float]:
     sentences = sentence_segmentation(transcript)
     tokens = self.set_labels(sentences)
     changes = [token.label for token in tokens]

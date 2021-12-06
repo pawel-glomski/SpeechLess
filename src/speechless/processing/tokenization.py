@@ -169,7 +169,7 @@ def make_timeline_changes(tokens: List[EditToken],
       List[TimelineChanges]: List of changes, with intervals between words
       and before first and after last word
   """
-  rot = ranges_of_truth(np.array([not token.label for token in tokens]))
+  rot = ranges_of_truth(np.array([token.label == 0.0 for token in tokens]))
   changes = []
   for r in rot:
     start = tokens[r[0] - 1].end_time if r[0] > 0 else 0.0

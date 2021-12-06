@@ -5,7 +5,7 @@ from summarizer import Summarizer
 # from summarizer.sbert import SBertSummarizer
 
 from .analysis import AnalysisMethod, AnalysisDomain, analysis_method_cli, ARG_PREPARE_METHOD_FN
-from speechless.processing.tokenization import (SENTENCE_SEPARATOR, SENTENCE_SEPARATOR_VALID_SET,
+from speechless.processing.tokenization import (EditToken, SENTENCE_SEPARATOR, SENTENCE_SEPARATOR_VALID_SET,
                                                 TOKEN_SEPARATOR, make_timeline_changes,
                                                 sentence_segmentation)
 from speechless.readers import read_subtitles, read_entire_audio
@@ -31,28 +31,32 @@ class BertSentenceAnalysis(AnalysisMethod):
       transcript = speech_to_text(audio[0] if len(audio.shape) > 1 else audio)
     else:
       transcript = read_subtitles(subtitles_path)
+    return make_timeline_changes(self.set_labels(transcript))
+
+  def set_labels(self, transcript):
     sentences = sentence_segmentation(transcript)
     document = ''.join([token.text for sentence in sentences for token in sentence])
-    summary = self.summarizer(document, ratio=self.ratio, min_length=20, return_as_list=True)
-    for sent_idx in range(len(summary)):
-      if not summary[sent_idx].endswith(TOKEN_SEPARATOR):
-        summary[sent_idx] += TOKEN_SEPARATOR
+    summary_sents = self.summarizer(document, ratio=self.ratio, min_length=20, return_as_list=True)
+    for sent_idx in range(len(summary_sents)):
+      if not summary_sents[sent_idx].endswith(TOKEN_SEPARATOR):
+        summary_sents[sent_idx] += TOKEN_SEPARATOR
       for separator in SENTENCE_SEPARATOR_VALID_SET:
-        if summary[sent_idx].endswith(separator):
+        if summary_sents[sent_idx].endswith(separator):
           break
       else:
-        if summary[sent_idx].endswith(TOKEN_SEPARATOR):
-          summary[sent_idx] = summary[sent_idx][:-len(TOKEN_SEPARATOR)]
-        summary[sent_idx] += SENTENCE_SEPARATOR
-    summary = ''.join([sent for sent in summary])
+        summary_sents[sent_idx] = (summary_sents[sent_idx][:-len(TOKEN_SEPARATOR)] +
+                                   SENTENCE_SEPARATOR)
+    summary = ''.join(summary_sents)
 
     for sentence in sentences:
       sentence_text = ''.join([token.text for token in sentence])
       label = sentence_text in summary
       for token in sentence:
-        token.label = label
-    return make_timeline_changes([token for sentence in sentences for token in sentence])
+        token.label = float(label)
+    return [token for sentence in sentences for token in sentence]
 
+  def score_transcript(self, transcript: List[EditToken]) -> List[float]:
+    return [token.label for token in self.set_labels(transcript)]
 
 ############################################### CLI ################################################
 
