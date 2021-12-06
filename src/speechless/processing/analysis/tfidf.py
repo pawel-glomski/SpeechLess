@@ -13,8 +13,7 @@ from speechless.processing.analysis.analysis import (ARG_PREPARE_METHOD_FN, Anal
                                                      AnalysisMethod, analysis_method_cli)
 from speechless.processing.tokenization import (EditToken, make_timeline_changes,
                                                 sentence_segmentation, spacy_nlp)
-from speechless.readers.subtitles import read_subtitles
-from speechless.readers import read_entire_audio
+from speechless.readers import read_subtitles, read_entire_audio
 from speechless.transcription import speech_to_text
 from speechless.utils.logging import NULL_LOGGER
 from speechless.utils.storage import make_cache_dir_rel
@@ -105,7 +104,7 @@ class TfidfAnalysis(AnalysisMethod):
 
     return [token for s in sentences for token in s]
 
-  def score_transcription(self, transcript: List[EditToken]) -> List[float]:
+  def score_transcript(self, transcript: List[EditToken]) -> List[float]:
     sentences = sentence_segmentation(transcript)
     tokens = self.set_labels(sentences)
     changes = [token.label for token in tokens]
