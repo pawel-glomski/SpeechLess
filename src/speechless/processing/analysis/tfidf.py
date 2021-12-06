@@ -13,8 +13,7 @@ from speechless.processing.analysis.analysis import (ARG_PREPARE_METHOD_FN, Anal
                                                      AnalysisMethod, analysis_method_cli)
 from speechless.processing.tokenization import (EditToken, make_timeline_changes,
                                                 sentence_segmentation, spacy_nlp)
-from speechless.readers.subtitles import read_subtitles
-from speechless.readers import read_entire_audio
+from speechless.readers import read_subtitles, read_entire_audio
 from speechless.transcription import speech_to_text
 from speechless.utils.logging import NULL_LOGGER
 from speechless.utils.storage import make_cache_dir_rel

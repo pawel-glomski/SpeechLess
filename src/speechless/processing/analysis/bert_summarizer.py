@@ -8,7 +8,8 @@ from .analysis import AnalysisMethod, AnalysisDomain, analysis_method_cli, ARG_P
 from speechless.processing.tokenization import (SENTENCE_SEPARATOR, SENTENCE_SEPARATOR_VALID_SET,
                                                 TOKEN_SEPARATOR, make_timeline_changes,
                                                 sentence_segmentation)
-from speechless.readers import read_subtitles
+from speechless.readers import read_subtitles, read_entire_audio
+from speechless.transcription import speech_to_text
 from speechless.utils.logging import NULL_LOGGER
 from speechless.edit_context import TimelineChange
 
@@ -17,14 +18,20 @@ class BertSentenceAnalysis(AnalysisMethod):
 
   def __init__(self, ratio: float, logger: Logger = NULL_LOGGER):
     super().__init__('BERT-based sentence analysis', [AnalysisDomain.AUDIO], logger)
-    self.summarizer = Summarizer('bert-base-uncased')
+    self.summarizer = Summarizer('distilbert-base-uncased')
     # self.summarizer = SBertSummarizer('multi-qa-mpnet-base-dot-v1')
     self.ratio = ratio
 
   def analyze(self, recording_path: str, subtitles_path: str) -> List[TimelineChange]:
     if subtitles_path is None:
-      raise NotImplementedError
-    sentences = sentence_segmentation(read_subtitles(subtitles_path))
+      audio, _ = read_entire_audio(recording_path,
+                                   aud_format='s16le',
+                                   sample_rate=16000,
+                                   logger=self.logger)
+      transcript = speech_to_text(audio[0] if len(audio.shape) > 1 else audio)
+    else:
+      transcript = read_subtitles(subtitles_path)
+    sentences = sentence_segmentation(transcript)
     document = ''.join([token.text for sentence in sentences for token in sentence])
     summary = self.summarizer(document, ratio=self.ratio, min_length=20, return_as_list=True)
     for sent_idx in range(len(summary)):
@@ -59,7 +66,7 @@ class CLI:
 
   @staticmethod
   def prepare_method(args, logger) -> 'BertSentenceAnalysis':
-    return BertSentenceAnalysis(args[CLI.ARG_RATIO], logger=logger)
+    return BertSentenceAnalysis(args.get(CLI.ARG_RATIO, CLI.DEFAULT_ARGS[CLI.ARG_RATIO]), logger=logger)
 
   @staticmethod
   def setup_arg_parser(parser: ArgumentParser) -> ArgumentParser:
