@@ -85,6 +85,7 @@ def read_entire_audio(file_path: str,
                       aud_stream_idx: int = None,
                       aud_format: str = 'f32le',
                       sample_rate: int = None,
+                      mono: bool = False,
                       logger: Logger = NULL_LOGGER) -> Tuple[np.ndarray, Dict[StreamInfo, object]]:
   """Reads an entire audio stream from a recording
 
@@ -92,9 +93,10 @@ def read_entire_audio(file_path: str,
       file_path (str): Path to the recording
       aud_stream_idx (int, optional): Index of the audio stream (0 -> first, 1 -> second). \
         Defaults to None (the first audio stream)
-      aud_format (str, optional): A desired audio format. Defaults to 'f32le'
-      sample_rate (int, optional): A desired sample rate. This will be the sample rate of the \
+      aud_format (str, optional): The desired audio format. Defaults to 'f32le'
+      sample_rate (int, optional): The desired sample rate. This will be the sample rate of the \
         returned signal.
+      mono (bool, optional): Whether to impose a single channel. Defaults to False.
       logger (Logger, optional): Logger for messages. Defaults to NULL_LOGGER
 
   Returns:
@@ -115,17 +117,18 @@ def read_entire_audio(file_path: str,
         'ffmpeg', '-i', f'{file_path}', '-map', f'0:a:{aud_stream_idx}', '-f', f'{aud_format}',
         '-acodec', f'{acodec}'
     ]
+    command += ['-ac', '1'] if mono else []
     command += ['-ar', f'{sample_rate}'] if sample_rate is not None else []
     command += ['pipe:1']
-    process = subprocess.Popen(stdout=subprocess.PIPE, args=command)
+    process = subprocess.Popen(stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, args=command)
     buffer, _ = process.communicate()
 
-    astream = container.streams.audio[aud_stream_idx]
     acodec = av.Codec(acodec, 'r')
     dtype = np.dtype(format_dtypes[acodec.audio_formats[0].name])
+    channels = 1 if mono else container.streams.audio[aud_stream_idx].channels
     if acodec.audio_formats[0].is_planar:
-      data = np.frombuffer(buffer, dtype).reshape((astream.channels, -1))
+      data = np.frombuffer(buffer, dtype).reshape((channels, -1))
     else:
-      data = np.frombuffer(buffer, dtype).reshape((-1, astream.channels)).T
+      data = np.frombuffer(buffer, dtype).reshape((-1, channels)).T
 
     return (data, AudioReader.prepare_stream_info(container, aud_stream_idx))

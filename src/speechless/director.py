@@ -8,7 +8,7 @@ from .editor import Editor
 from .edit_context import TimelineChange
 from .utils.config import CfgID
 from .utils.cli import cli_subcommand, FORMATTER_CLASS
-from .processing.analysis import ANALYSIS_METHODS, ARG_PREPARE_METHOD_FN
+from .processing.analysis import ANALYSIS_METHODS, ARG_PREPARE_ANALYSIS_METHOD_FN
 
 
 @cli_subcommand
@@ -121,10 +121,10 @@ class CLI:
       else:
         editor = Editor(logger=logger)
 
-      if ARG_PREPARE_METHOD_FN in args:
+      if ARG_PREPARE_ANALYSIS_METHOD_FN in args:
         if len(methods) > 0:
           logger.warning('Analysis methods specified in the config file will be ignored')
-        methods = [(args[ARG_PREPARE_METHOD_FN], args)]
+        methods = [(args[ARG_PREPARE_ANALYSIS_METHOD_FN], args)]
       tl_changes = []
       for method_prepare_fn, method_cfg_dict in methods:
         method = method_prepare_fn(method_cfg_dict, logger=logger)

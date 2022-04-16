@@ -1,7 +1,8 @@
 import numpy as np
-from typing import List
+from typing import Callable, Tuple, List
 
 Real = np.double
+
 
 def ranges_of_truth(arr: np.ndarray) -> np.ndarray:
   """Returns a list of ranges, for which elements of a specified array are True. For example:
@@ -69,3 +70,19 @@ def int_number_of_parts(number: int, part_limit: int) -> int:
       int: Number of parts
   """
   return max(int(np.ceil(number / part_limit)), 1)
+
+
+def kernel_2d_from_window(shape: Tuple, window_fn: Callable, **kwargs) -> np.ndarray:
+  """Creates a 2D kernel from a 1D window function
+
+  Args:
+      shape (tuple): Shape of the kernel
+      window_fn (Callable): 1D window funciton (for example np.hanning)
+
+  Returns:
+      np.ndarray: 2D kernel
+  """
+  kernel = np.outer(window_fn(shape[0] + 2, **kwargs), window_fn(shape[1] + 2, **kwargs))
+  kernel = kernel[1:-1, 1:-1]
+  kernel /= kernel.sum()
+  return kernel
