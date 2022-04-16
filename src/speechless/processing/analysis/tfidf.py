@@ -9,8 +9,7 @@ from pathlib import Path
 from typing import List
 
 from speechless.edit_context.common import TimelineChange
-from speechless.processing.analysis.analysis import (ARG_PREPARE_METHOD_FN, AnalysisDomain,
-                                                     AnalysisMethod, analysis_method_cli)
+from speechless.processing.analysis.analysis import (ARG_PREPARE_ANALYSIS_METHOD_FN, AnalysisMethod)
 from speechless.processing.tokenization import (EditToken, make_timeline_changes,
                                                 sentence_segmentation, spacy_nlp)
 from speechless.readers.subtitles import read_subtitles
@@ -115,7 +114,6 @@ class TfidfAnalysis(AnalysisMethod):
 ############################################### CLI ################################################
 
 
-@analysis_method_cli
 class CLI:
   COMMAND = 'tfidf'
   DESCRIPTION = 'Tf-idf analysis'
@@ -168,4 +166,4 @@ class CLI:
                         help='Use lemmatization',
                         action='store_true',
                         default=CLI.DEFAULT_ARGS[CLI.ARG_LEMMATIZE])
-    parser.set_defaults(**{ARG_PREPARE_METHOD_FN: CLI.prepare_method})
+    parser.set_defaults(**{ARG_PREPARE_ANALYSIS_METHOD_FN: CLI.prepare_method})
